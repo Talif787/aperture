@@ -62,10 +62,14 @@ cyclomatic_complexity:
   error: 12
 
 identifier_name:
+  # Two characters is the floor, not three. Conventional short names are clearer than
+  # padded ones: xs, sm, md, lg and xl on a spacing scale, and argument labels like
+  # `to` and `at` that read as English at the call site. One character still fails
+  # unless it is on the list below, where the meaning is unambiguous by convention.
   min_length:
-    warning: 3
-    error: 2
-  excluded: [id, x, y, z, ok, up]
+    warning: 2
+    error: 1
+  excluded: [id, x, y, z, ok, up, to, at, by, of, in]
 
 force_cast: error
 force_try: error
