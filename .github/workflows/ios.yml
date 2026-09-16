@@ -1,5 +1,12 @@
 name: ios
 
+# macOS work, path-filtered so it runs only when it can possibly be affected.
+#
+# This job is also the answer to a practical constraint: development happens in Cloud
+# Shell, where Xcode does not exist. Until a Mac is available, this workflow is the only
+# thing that compiles the app target, so it is treated as part of the inner loop rather
+# than as a release gate.
+
 on:
   pull_request:
     branches: [main]
@@ -68,7 +75,8 @@ jobs:
         run: |
           set -o pipefail
           # A generic destination compiles for the simulator without booting one and
-          # without naming a device. Device names come and go between Xcode releases.
+          # without naming a device. Device names come and go between Xcode releases,
+          # and a build job has no reason to depend on which ones exist.
           xcodebuild build \
             -project Aperture.xcodeproj \
             -scheme Aperture \

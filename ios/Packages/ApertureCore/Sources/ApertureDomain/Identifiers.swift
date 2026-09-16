@@ -13,7 +13,7 @@ public struct EntityID<Subject>: Hashable, Sendable, Codable, CustomStringConver
     }
 
     /// Mints a new creation-ordered identifier.
-    public init(generatedAt instant: Date, random: some RandomSource) {
+    public init(generatedAt instant: Date, random: any RandomSource) {
         self.rawValue = UUIDv7.generate(at: instant, random: random)
     }
 
@@ -43,6 +43,8 @@ public enum MediaSubject: Sendable {}
 public enum TenantSubject: Sendable {}
 public enum DeviceSubject: Sendable {}
 public enum OperationSubject: Sendable {}
+public enum TemplateSubject: Sendable {}
+public enum UserSubject: Sendable {}
 
 public typealias InspectionID = EntityID<InspectionSubject>
 public typealias FindingID = EntityID<FindingSubject>
@@ -50,3 +52,5 @@ public typealias MediaID = EntityID<MediaSubject>
 public typealias TenantID = EntityID<TenantSubject>
 public typealias DeviceID = EntityID<DeviceSubject>
 public typealias OperationID = EntityID<OperationSubject>
+public typealias TemplateID = EntityID<TemplateSubject>
+public typealias UserID = EntityID<UserSubject>

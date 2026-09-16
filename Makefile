@@ -59,7 +59,10 @@ core-test-verbose: ## Test ApertureCore with per-test output
 #
 # Cloud Shell gives 5 GB of $HOME and a Swift toolchain needs roughly 3 GB. Docker images
 # live on the VM's ephemeral disk instead, so these targets cost nothing against that
-# quota. They also run the exact image the CI job runs.
+# quota. They also run the exact image the CI job runs, which removes a class of
+# "works on my machine" difference between local and CI results.
+#
+# Override the image with: make core-test-docker SWIFT_IMAGE=swift:6.2
 
 DOCKER_SWIFT = docker run --rm \
 	-u $(shell id -u):$(shell id -g) \
@@ -76,7 +79,7 @@ core-test-docker: ## Test ApertureCore in a container, no local Swift required
 	@$(DOCKER_SWIFT) swift test
 
 .PHONY: core-shell-docker
-core-shell-docker: ## Interactive shell in the Swift container
+core-shell-docker: ## Interactive shell in the Swift container, at the package root
 	@docker run --rm -it -u $(shell id -u):$(shell id -g) -e HOME=/tmp \
 		-v "$(CURDIR)/$(CORE_PKG)":/pkg -w /pkg $(SWIFT_IMAGE) bash
 

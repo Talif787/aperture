@@ -15,6 +15,8 @@ import PackageDescription
 let package = Package(
     name: "AperturePlatform",
     platforms: [
+        // String form rather than .v26: the enum case exists only in newer SwiftPM
+        // versions, and this manifest must also parse under the Linux toolchain.
         .iOS("26.0"),
         .macOS("15.0")
     ],
@@ -33,7 +35,8 @@ let package = Package(
             name: "ApertureData",
             dependencies: [
                 .product(name: "ApertureDomain", package: "ApertureCore"),
-                .product(name: "ApertureSync", package: "ApertureCore")
+                .product(name: "ApertureSync", package: "ApertureCore"),
+                .product(name: "ApertureNetworking", package: "ApertureCore")
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

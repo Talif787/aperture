@@ -38,8 +38,10 @@ command -v xcodegen >/dev/null && ok "xcodegen" || warn "xcodegen" "macOS only: 
 head1 "What builds on this machine"
 if command -v swift >/dev/null; then
   ok "ApertureCore" "domain, sync, contracts. make core-test"
+elif command -v docker >/dev/null; then
+  ok "ApertureCore" "via container. make core-test-docker"
 else
-  warn "ApertureCore" "needs the Swift toolchain"
+  warn "ApertureCore" "needs the Swift toolchain or Docker"
 fi
 if [[ "$OS" == "Darwin" ]]; then
   ok "AperturePlatform" "make platform-build"

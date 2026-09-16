@@ -32,6 +32,24 @@ Clients ignore unknown fields, and an unknown enum value renders as an opaque un
 rather than failing to decode the entity that contains it. A new defect class added
 server-side must not strand an inspection on an old client.
 
+## Domain types are not wire types
+
+`Inspection`, `Finding`, `MediaAsset`, `SyncMetadata` and the rest conform to `Codable`,
+and that conformance is for local persistence and test round-trips only. It is symmetric:
+the same code encodes and decodes, so the key names are private to the device and carry no
+contract obligation.
+
+Wire types are generated from this directory and live in `ApertureContracts`. The data
+layer maps between the two. A domain type must never be encoded directly onto the wire,
+because that would silently make every property name part of the protocol, and renaming a
+field for clarity would become a breaking change nobody noticed.
+
+The exception is anything that decodes a server payload directly, such as `APIError`.
+Those carry explicit `CodingKeys` matching the documented envelope. Explicit rather than a
+decoder-wide snake-case strategy, for a specific reason: every field in an error envelope
+is optional, so a key mismatch does not throw. It decodes successfully with nils, and the
+failure surfaces far downstream as a missing value nobody can explain.
+
 ## Why the conformance corpus exists
 
 The conflict policy is implemented twice, in Swift and in Go, and two implementations of

@@ -32,6 +32,7 @@ done
 
 log "Installing GitHub CLI if absent"
 if ! command -v gh >/dev/null 2>&1; then
+  # Installed into $HOME so it survives a VM recycle.
   GH_VERSION="2.63.2"
   curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
     | tar -xz -C "${TOOLS_DIR}" --strip-components=1 "gh_${GH_VERSION}_linux_amd64/bin/gh"

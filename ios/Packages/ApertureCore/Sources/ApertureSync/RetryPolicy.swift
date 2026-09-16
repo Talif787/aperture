@@ -46,7 +46,7 @@ public struct RetryPolicy: Sendable, Equatable {
     }
 
     /// The delay before the next attempt, drawn uniformly from `0...ceiling`.
-    public func delay(forAttempt attempt: Int, random: some RandomSource) -> TimeInterval {
+    public func delay(forAttempt attempt: Int, random: any RandomSource) -> TimeInterval {
         let ceiling = delayCeiling(forAttempt: attempt)
         // Millisecond resolution is more than adequate and keeps the draw in integer space.
         let milliseconds = UInt64(ceiling * 1000)

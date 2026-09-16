@@ -24,7 +24,7 @@ public enum UUIDv7 {
     static let maximumTimestampMilliseconds: UInt64 = (1 << 48) - 1
 
     /// Generates a version 7 UUID for the supplied instant.
-    public static func generate(at instant: Date, random: some RandomSource) -> UUID {
+    public static func generate(at instant: Date, random: any RandomSource) -> UUID {
         let milliseconds = timestampMilliseconds(from: instant)
         let entropy = random.bytes(count: 10)
         return assemble(milliseconds: milliseconds, entropy: entropy)

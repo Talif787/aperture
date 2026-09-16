@@ -33,7 +33,8 @@ def check_golangci_version_alignment() -> list[str]:
 
     golangci-lint v1 and v2 have incompatible configuration schemas, and neither binary
     contains the other's parser. A v2 config run by a v1 binary fails with a wall of
-    JSON-schema errors that says nothing about the actual cause.
+    JSON-schema errors that says nothing about the actual cause, so catching the mismatch
+    here saves a push and a CI round trip.
     """
     config = REPO_ROOT / "backend" / ".golangci.yml"
     workflow = REPO_ROOT / ".github" / "workflows" / "pr.yml"

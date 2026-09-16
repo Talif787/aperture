@@ -15,12 +15,15 @@ import PackageDescription
 let package = Package(
     name: "ApertureCore",
     platforms: [
+        // String form rather than .v26: the enum case exists only in newer SwiftPM
+        // versions, and this manifest must also parse under the Linux toolchain.
         .iOS("26.0"),
         .macOS("15.0")
     ],
     products: [
         .library(name: "ApertureDomain", targets: ["ApertureDomain"]),
         .library(name: "ApertureSync", targets: ["ApertureSync"]),
+        .library(name: "ApertureNetworking", targets: ["ApertureNetworking"]),
         .library(name: "ApertureContracts", targets: ["ApertureContracts"]),
         .library(name: "ApertureTestSupport", targets: ["ApertureTestSupport"])
     ],
@@ -36,13 +39,18 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
+            name: "ApertureNetworking",
+            dependencies: ["ApertureDomain", "ApertureSync"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
             name: "ApertureContracts",
             dependencies: [],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "ApertureTestSupport",
-            dependencies: ["ApertureDomain", "ApertureSync"],
+            dependencies: ["ApertureDomain", "ApertureSync", "ApertureNetworking"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -53,6 +61,11 @@ let package = Package(
         .testTarget(
             name: "ApertureSyncTests",
             dependencies: ["ApertureSync", "ApertureTestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "ApertureNetworkingTests",
+            dependencies: ["ApertureNetworking", "ApertureTestSupport"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

@@ -82,11 +82,42 @@ make check
 Expected: module boundaries OK, thirteen schema assertions passing, configuration OK. If
 any of that fails, the upload is corrupt. Re-upload before continuing.
 
-### Step 4. Install the toolchain
+### Step 4. Get a Swift toolchain
 
-This installs the Swift Linux toolchain and the GitHub CLI into `$HOME`, and writes
-`~/.customize_environment` so system packages are restored whenever the Cloud Shell VM
-recycles. It takes about four minutes, most of which is the Swift download.
+There are two routes. **Route A is recommended in Cloud Shell** because it costs nothing
+against your 5 GB `$HOME` quota.
+
+First, see where you stand:
+
+```bash
+df -h ~ | tail -1
+du -sh ~/* ~/.[!.]* 2>/dev/null | sort -h | tail -12
+```
+
+#### Route A: Swift in a container (recommended in Cloud Shell)
+
+Cloud Shell stores Docker images on the VM's ephemeral disk, not in `$HOME`, so a 2 GB
+Swift image does not touch your quota. It is also the exact image the CI job runs, which
+removes a class of difference between local results and CI results.
+
+```bash
+cd ~/aperture
+docker pull swift:6.3        # a few minutes, once per VM lifetime
+make core-test-docker
+```
+
+Verify where your Docker data lives if you want to confirm the quota claim:
+
+```bash
+docker info 2>/dev/null | grep "Docker Root Dir"    # expect /var/lib/docker, not /home/...
+```
+
+Trade-off: the image is re-pulled after a VM recycle, which costs a few minutes at the
+start of a session. Everything else is identical, and `make ci-local` falls back to the
+container automatically when no local toolchain is present.
+
+You still need the rest of the setup script for the GitHub CLI, `~/.customize_environment`,
+and the shell profile:
 
 ```bash
 cd ~/aperture
@@ -94,17 +125,51 @@ cd ~/aperture
 source ~/.bashrc
 ```
 
-Confirm:
+The script will report that the Swift install failed if there is not enough room. That is
+expected on Route A and does not stop the rest of it.
+
+#### Route B: local toolchain via swiftly
+
+Needs roughly 3 GB free. Reclaim space first if necessary:
 
 ```bash
-cd ~/aperture
-make doctor
+rm -rf ~/.cache/*
+du -sh ~/* ~/.[!.]* 2>/dev/null | sort -h | tail -12   # then remove what you do not need
 ```
 
-You want `yes` next to `git`, `python3`, `swift`, `go`, `docker`, `gh`, and `gcloud`, and
-`yes` next to `ApertureCore` under "What builds on this machine". `no` next to
-`xcodebuild`, `xcodegen`, `AperturePlatform`, and `app target` is correct and expected on
-Linux.
+Note that `docker system prune` does **not** help here, because Docker data is not in
+`$HOME`.
+
+Then install, pinning an explicit version rather than `latest`:
+
+```bash
+cd /tmp
+curl -fLO "https://download.swift.org/swiftly/linux/swiftly-1.1.2-$(uname -m).tar.gz"
+tar -zxf "swiftly-1.1.2-$(uname -m).tar.gz"
+./swiftly init --assume-yes --skip-install
+. "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh"
+swiftly install 6.3.3 --use --assume-yes
+hash -r
+swift --version
+```
+
+**Pin the version.** `swiftly install latest` resolves to whatever release is tagged, which
+can be a version whose Linux binaries are not published yet, and the install then fails
+with a 404 on a URL that looks correct. Check
+<https://www.swift.org/install/linux/> for the current release before picking a number.
+
+If swiftly reports missing system packages, it prints the exact `apt-get` line. Run it, and
+add those packages to `~/.customize_environment` so they return after a VM recycle.
+
+#### Confirm either route
+
+```bash
+cd ~/aperture && make doctor
+```
+
+Under "What builds on this machine" you want `yes` next to `ApertureCore`, either
+`make core-test` (Route B) or `make core-test-docker` (Route A). `no` next to `xcodebuild`,
+`xcodegen`, `AperturePlatform`, and `app target` is correct and expected on Linux.
 
 ### Step 5. Run the Swift and Go test suites
 
@@ -113,8 +178,11 @@ environment without a Swift toolchain.
 
 ```bash
 cd ~/aperture
-make core-test        # ApertureCore: domain and sync. Expect around 20 tests passing
-make backend-test     # Go, with the race detector
+make core-test          # Route B, local toolchain
+# or
+make core-test-docker   # Route A, container
+
+make backend-test       # Go, with the race detector
 ```
 
 First `swift test` compiles the whole package and takes two to three minutes. Subsequent
@@ -576,6 +644,12 @@ Swift builds noticeably faster.
 |---|---|---|
 | `Permission denied` running `./scripts/...` | ZIP did not preserve the executable bit | `chmod +x scripts/*.sh scripts/*.py` |
 | `swift: command not found` after reconnecting | VM recycled, `$PATH` not reloaded | `source ~/.bashrc` |
+| Swift download returns 404 | A hand-built toolchain URL, which is easy to get wrong | Use swiftly, which resolves the URL itself. See Step 4 |
+| `swiftly install latest` fails with "does not exist at URL" | `latest` resolved to a release tagged but not yet published for Linux | Pin a version: `swiftly install 6.3.3 --use` |
+| Not enough space in `$HOME` for a toolchain | 5 GB quota, roughly 3 GB toolchain | Use Route A, the container. `docker system prune` does not help: Docker data is not in `$HOME` |
+| `swift: command not found` after a successful swiftly install | The shell has not picked up swiftly's env file | `. ~/.local/share/swiftly/env.sh && hash -r` |
+| `swiftly init` reports missing system packages | Debian base image lacks some Swift runtime dependencies | Run the `apt-get` line it prints, then add those packages to `~/.customize_environment` |
+| Swift install fails partway, disk full | 5 GB `$HOME` and a 3 GB toolchain | `docker system prune -af`, then re-run Step 4 |
 | Swift or `gh` gone entirely | Installed outside `$HOME` at some point | Re-run `./scripts/cloudshell_setup.sh` |
 | `$PROJECT_ID` empty after reconnecting | Shell restarted | `source ~/.bashrc` |
 | `make check` fails right after unzipping | Corrupt upload | Re-upload the ZIP and unzip again |

@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import ApertureDomain
 import ApertureTelemetry
+import ApertureNetworking
 
 /// The composition root.
 ///
