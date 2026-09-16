@@ -1,0 +1,103 @@
+# Lint rules are a boundary-enforcement tool here, not a style preference. The rules that
+# matter most are the custom ones at the bottom, which encode requirements from the
+# security and privacy model that a reviewer would otherwise have to catch by eye.
+
+included:
+  - ios/App
+  - ios/Packages/ApertureCore/Sources
+  - ios/Packages/ApertureCore/Tests
+  - ios/Packages/AperturePlatform/Sources
+  - ios/Packages/AperturePlatform/Tests
+
+excluded:
+  - ios/Packages/ApertureCore/Sources/ApertureContracts/Generated
+  - "**/.build"
+
+opt_in_rules:
+  - array_init
+  - closure_spacing
+  - collection_alignment
+  - contains_over_filter_count
+  - empty_count
+  - empty_string
+  - explicit_init
+  - fatal_error_message
+  - first_where
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - last_where
+  - literal_expression_end_indentation
+  - modifier_order
+  - overridden_super_call
+  - prefer_self_type_over_type_of_self
+  - redundant_nil_coalescing
+  - sorted_first_last
+  - toggle_bool
+  - unneeded_parentheses_in_closure_argument
+  - yoda_condition
+
+disabled_rules:
+  - todo # TODO markers are rejected outright by the custom rule below, not warned about
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_comments: false
+  ignores_urls: true
+
+type_body_length:
+  warning: 250
+  error: 400
+
+file_length:
+  warning: 400
+  error: 600
+
+function_body_length:
+  warning: 40
+  error: 80
+
+cyclomatic_complexity:
+  warning: 8
+  error: 12
+
+identifier_name:
+  min_length:
+    warning: 3
+    error: 2
+  excluded: [id, x, y, z, ok, up]
+
+force_cast: error
+force_try: error
+force_unwrapping: error
+
+custom_rules:
+  no_print:
+    name: "Use Telemetry, not print"
+    regex: '(^|\s)print\('
+    message: "print() bypasses redaction. Use the Telemetry protocol."
+    severity: error
+
+  no_user_defaults_secrets:
+    name: "Secrets never go in UserDefaults"
+    regex: 'UserDefaults[^\n]*(token|secret|password|credential|key)'
+    message: "Tokens and key material belong in the Keychain. See ApertureSecurity.SecretKind."
+    severity: error
+
+  no_todo_markers:
+    name: "No TODO or FIXME in committed code"
+    regex: '(?i)//\s*(todo|fixme|hack)\b'
+    message: "Open work belongs in the issue tracker, not in a comment that nobody reads."
+    severity: error
+
+  no_unchecked_sendable:
+    name: "@unchecked Sendable requires an ADR"
+    regex: '@unchecked\s+Sendable'
+    message: "Strict concurrency is enforced without suppressions. If one is genuinely required, record an ADR and add an inline exclusion."
+    severity: error
+
+  no_hardcoded_url:
+    name: "No hardcoded backend URL"
+    regex: 'https?://(api|.*\.aperture\.example)'
+    message: "Endpoints come from AppEnvironment, which is populated per configuration from xcconfig."
+    severity: error

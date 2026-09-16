@@ -1,0 +1,25 @@
+# Formatting is decided once, by a tool, and never discussed in review again.
+
+--swiftversion 6.0
+
+--exclude .build,ios/Packages/ApertureCore/Sources/ApertureContracts/Generated
+
+--indent 4
+--maxwidth 120
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--closingparen balanced
+--trimwhitespace always
+--stripunusedargs closure-only
+--self remove
+--importgrouping testable-bottom
+--commas always
+--semicolons never
+--declutternames enabled
+
+--disable blankLinesAroundMark
+--enable isEmpty
+--enable redundantType
+--enable sortImports
+--enable blankLineAfterImports

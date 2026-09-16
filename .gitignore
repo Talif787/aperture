@@ -1,0 +1,50 @@
+# macOS / Xcode
+.DS_Store
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated Xcode project (generated from ios/project.yml by XcodeGen)
+ios/Aperture.xcodeproj/
+
+# Generated code (regenerated from contracts/ by scripts/generate.sh)
+backend/gen/
+ios/Packages/ApertureCore/Sources/ApertureContracts/Generated/
+
+# Go
+backend/bin/
+backend/coverage.out
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+
+# Secrets and credentials (never commit)
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+.env
+.env.*
+!.env.example
+gha-creds-*.json
+service-account*.json
+
+# Local tooling
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.tool-cache/

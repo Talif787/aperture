@@ -1,0 +1,15 @@
+#include "Shared.xcconfig"
+
+BUNDLE_ID_SUFFIX = .debug
+APERTURE_ENVIRONMENT_NAME = debug
+
+// Points at the local backend started by `make backend-up`. On a physical device replace
+// localhost with the machine's LAN address; on the simulator localhost resolves correctly.
+APERTURE_API_BASE_URL = http:/$()/localhost:8080
+APERTURE_OAUTH_CLIENT_ID = aperture-ios-local
+APERTURE_DIAGNOSTICS_ENABLED = YES
+
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG APERTURE_DIAGNOSTICS
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+ONLY_ACTIVE_ARCH = YES
+ENABLE_TESTABILITY = YES

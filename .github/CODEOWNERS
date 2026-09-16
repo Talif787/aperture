@@ -1,0 +1,18 @@
+# Ownership drives review routing. Two rules carry real weight.
+#
+# contracts/ requires review from both client and server owners, because a protocol change
+# that only one side has read is how the two implementations drift, and on this system
+# drift appears as silent data divergence rather than as a build failure.
+#
+# Anything touching the sync engine or the security model needs a second reader for the
+# same reason: the failure modes are invisible until they are expensive.
+
+*                                   @talif
+
+/contracts/                         @talif
+/ios/Packages/ApertureCore/Sources/ApertureSync/   @talif
+/ios/Packages/AperturePlatform/Sources/ApertureSecurity/   @talif
+/backend/internal/sync/             @talif
+/backend/internal/tenancy/          @talif
+/infra/                             @talif
+/.github/workflows/                 @talif

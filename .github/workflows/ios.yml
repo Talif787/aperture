@@ -1,0 +1,79 @@
+name: ios
+
+# macOS work, path-filtered so it runs only when it can possibly be affected.
+#
+# This job is also the answer to a practical constraint: development happens in Cloud
+# Shell, where Xcode does not exist. Until a Mac is available, this workflow is the only
+# thing that compiles the app target, so it is treated as part of the inner loop rather
+# than as a release gate.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    # Xcode 27 requires Apple silicon. macos-15 and later are arm64.
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.app
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build AperturePlatform
+        working-directory: ios/Packages/AperturePlatform
+        run: swift build
+
+      - name: Test AperturePlatform
+        working-directory: ios/Packages/AperturePlatform
+        run: swift test
+
+      - name: Build the app
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Aperture.xcodeproj \
+            -scheme Aperture \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ~/Library/Logs/gym
+          if-no-files-found: ignore

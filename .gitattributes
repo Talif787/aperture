@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.mlmodel binary
+*.mlpackage binary
+
+# Generated files: collapse in PR diffs but still reviewable on demand
+backend/gen/** linguist-generated=true
+ios/Packages/ApertureCore/Sources/ApertureContracts/Generated/** linguist-generated=true

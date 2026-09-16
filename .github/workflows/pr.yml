@@ -1,0 +1,103 @@
+name: pull-request
+
+# The fast gate. Budget: under 10 minutes wall clock.
+#
+# Everything here runs on Linux, which is deliberate. The expensive macOS work is split
+# into ios.yml and path-filtered, because macOS runner minutes bill at roughly ten times
+# the Linux rate and most pull requests never touch the app target.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Boundaries, schema, configuration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Module boundaries and acyclicity
+        run: python3 scripts/check_module_boundaries.py
+
+      - name: Sync queue schema
+        run: python3 scripts/verify_queue_schema.py
+
+      - name: Configuration files
+        run: python3 scripts/validate_configs.py
+
+      - name: Reject committed secrets
+        run: |
+          set -euo pipefail
+          # Cheap, specific patterns. Deliberately not a general secret scanner: this runs
+          # on every push and must stay fast. The full scan runs nightly.
+          if git grep -nIE '(-----BEGIN [A-Z ]*PRIVATE KEY|AIza[0-9A-Za-z_-]{35}|ghp_[0-9A-Za-z]{36})' \
+               -- . ':!*.md' ':!scripts/*'; then
+            echo "::error::Possible credential committed"
+            exit 1
+          fi
+          echo "No credential patterns found."
+
+  core:
+    name: ApertureCore on Linux
+    runs-on: ubuntu-24.04
+    container: swift:6.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        working-directory: ios/Packages/ApertureCore
+        run: swift build --build-tests
+
+      - name: Test
+        working-directory: ios/Packages/ApertureCore
+        run: swift test --parallel
+
+  backend:
+    name: Go service
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: backend/go.sum
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Test with the race detector
+        working-directory: backend
+        run: go test -race -count=1 ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: backend
+          version: latest
+
+  swift-lint:
+    name: SwiftLint
+    runs-on: ubuntu-24.04
+    container: ghcr.io/realm/swiftlint:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: swiftlint --strict --reporter github-actions-logging

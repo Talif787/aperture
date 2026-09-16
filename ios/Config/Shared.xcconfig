@@ -1,0 +1,25 @@
+// Settings common to every configuration.
+// No secret belongs in any xcconfig. The OAuth client identifier below is public by
+// design; anything genuinely secret is fetched after authentication.
+
+PRODUCT_NAME = Aperture
+PRODUCT_BUNDLE_IDENTIFIER = com.aperture.field$(BUNDLE_ID_SUFFIX)
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+IPHONEOS_DEPLOYMENT_TARGET = 26.0
+TARGETED_DEVICE_FAMILY = 1,2
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY = YES
+SWIFT_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+DEAD_CODE_STRIPPING = YES
+CLANG_ENABLE_MODULES = YES
+ENABLE_BITCODE = NO
+
+// Application Transport Security: cleartext HTTP is disabled everywhere including debug.
+// A debug-only exception has a way of surviving into a release build.
+APERTURE_ALLOWS_ARBITRARY_LOADS = NO

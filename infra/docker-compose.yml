@@ -1,0 +1,53 @@
+# Local development stack. One command from a clean clone to a running backend:
+#
+#     make backend-up
+#
+# Postgres is pinned to the same major version as the managed instance in staging and
+# production. A local database that differs by a major version is a source of bugs that
+# only appear after deployment.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aperture}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
+      POSTGRES_DB: ${POSTGRES_DB:-aperture}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aperture} -d ${POSTGRES_DB:-aperture}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command:
+      # Verbose statement logging locally, where the volume is low and the value is high.
+      - postgres
+      - -c
+      - log_statement=all
+      - -c
+      - log_min_duration_statement=0
+
+  aperture:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        BUILD_VERSION: local
+    environment:
+      APERTURE_HTTP_ADDR: ":8080"
+      APERTURE_LOG_LEVEL: ${APERTURE_LOG_LEVEL:-debug}
+      APERTURE_ENVIRONMENT: local
+      APERTURE_DATABASE_URL: >-
+        postgres://${POSTGRES_USER:-aperture}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-aperture}?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
