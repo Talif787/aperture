@@ -242,7 +242,28 @@ git checkout main && git pull
 
 ---
 
-## Part B: Google Cloud
+## Part B: Google Cloud (deferred, not needed until Phase 11)
+
+**Skip this whole part for now.** Nothing before Phase 11 touches Google Cloud. Phases 2
+through 6 run entirely on your machine: the backend is `make backend-up`, which is Postgres
+and the service in local Docker Compose.
+
+| Step | Needed for | Earliest phase |
+|---|---|---|
+| 10, project and APIs | Deploying the backend anywhere | 12 |
+| 11, Artifact Registry | Pushing a container image | 12 |
+| 12, Workload Identity Federation | A workflow that deploys | 11 |
+| 13, Cloud SQL and Secret Manager | A hosted database | 12 |
+
+Three reasons to wait rather than get ahead. Linking billing makes spend possible, and a
+Cloud SQL instance bills whether or not anything connects to it. Configuring federated
+credentials before a deploy workflow exists gives you the configuration without any way to
+verify it. And Step 10 changes the active project for the shell, which affects anything
+else running in the same Cloud Shell session.
+
+**Come back here when Phase 11 begins**, which is release engineering, and do Steps 10
+through 13 in one sitting against a deploy workflow that can immediately prove they work.
+
 
 ### Step 10. Project, billing, and APIs
 
