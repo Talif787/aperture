@@ -1,12 +1,5 @@
 name: ios
 
-# macOS work, path-filtered so it runs only when it can possibly be affected.
-#
-# This job is also the answer to a practical constraint: development happens in Cloud
-# Shell, where Xcode does not exist. Until a Mac is available, this workflow is the only
-# thing that compiles the app target, so it is treated as part of the inner loop rather
-# than as a release gate.
-
 on:
   pull_request:
     branches: [main]
@@ -29,19 +22,31 @@ permissions:
 jobs:
   build:
     name: Build and test
-    # Xcode 27 requires Apple silicon. macos-15 and later are arm64.
-    runs-on: macos-15
+    # macos-26 ships Xcode 26.x, which provides the iOS 26 SDK this project targets.
+    # macos-15 carries Xcode 16 and cannot build an iOS 26.0 deployment target.
+    # Pinned rather than macos-latest: that label moves, and a silent image change is a
+    # confusing way to discover a broken build.
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_27.app
+      - name: Report available Xcode versions
+        run: ls -1d /Applications/Xcode*.app 2>/dev/null || echo "no versioned Xcode found"
 
-      - name: Report toolchain
+      - name: Select the newest installed Xcode
         run: |
+          set -euo pipefail
+          # Discovered rather than hardcoded. Runner images add and drop Xcode versions
+          # without notice, and a pinned path breaks the moment one is rotated out.
+          newest="$(ls -1d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "Selecting ${newest}"
+          sudo xcode-select -s "${newest}/Contents/Developer"
           xcodebuild -version
           swift --version
+
+      - name: Report available iOS SDKs
+        run: xcodebuild -showsdks | grep -i ios || echo "no iOS SDK reported"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -62,11 +67,13 @@ jobs:
         working-directory: ios
         run: |
           set -o pipefail
+          # A generic destination compiles for the simulator without booting one and
+          # without naming a device. Device names come and go between Xcode releases.
           xcodebuild build \
             -project Aperture.xcodeproj \
             -scheme Aperture \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
             | xcbeautify
 

@@ -7,12 +7,12 @@
 # Anything touching the sync engine or the security model needs a second reader for the
 # same reason: the failure modes are invisible until they are expensive.
 
-*                                   @talif
+*                                   @Talif787
 
-/contracts/                         @talif
-/ios/Packages/ApertureCore/Sources/ApertureSync/   @talif
-/ios/Packages/AperturePlatform/Sources/ApertureSecurity/   @talif
-/backend/internal/sync/             @talif
-/backend/internal/tenancy/          @talif
-/infra/                             @talif
-/.github/workflows/                 @talif
+/contracts/                         @Talif787
+/ios/Packages/ApertureCore/Sources/ApertureSync/   @Talif787
+/ios/Packages/AperturePlatform/Sources/ApertureSecurity/   @Talif787
+/backend/internal/sync/             @Talif787
+/backend/internal/tenancy/          @Talif787
+/infra/                             @Talif787
+/.github/workflows/                 @Talif787

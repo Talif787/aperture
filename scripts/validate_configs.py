@@ -24,7 +24,7 @@ YAML_PATTERNS = [
     ".swiftlint.yml",
     "backend/.golangci.yml",
 ]
-JSON_PATTERNS = ["contracts/**/*.json"]
+JSON_PATTERNS = ["contracts/**/*.json", "ios/**/*.xcassets/**/*.json"]
 
 
 def main() -> int:

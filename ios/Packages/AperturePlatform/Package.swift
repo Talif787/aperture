@@ -54,6 +54,9 @@ let package = Package(
         .target(
             name: "ApertureDesignSystem",
             dependencies: [],
+            // Declaring resources is what synthesizes Bundle.module. Without it, the
+            // asset-catalog colour lookups in DesignTokens do not compile.
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(

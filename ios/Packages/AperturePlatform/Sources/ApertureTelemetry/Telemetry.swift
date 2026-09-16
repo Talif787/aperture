@@ -45,7 +45,7 @@ public struct OSLogTelemetry: Telemetry {
     }
 
     public func event(_ name: StaticString, attributes: [String: TelemetryValue]) {
-        logger.info("event=\(name, privacy: .public) attrs=\(describe(attributes), privacy: .public)")
+        logger.info("event=\(name.description, privacy: .public) attrs=\(describe(attributes), privacy: .public)")
     }
 
     public func error(_ code: String, correlationID: String?) {
@@ -55,7 +55,7 @@ public struct OSLogTelemetry: Telemetry {
     }
 
     public func measurement(_ name: StaticString, milliseconds: Double) {
-        logger.info("measure=\(name, privacy: .public) ms=\(milliseconds, privacy: .public)")
+        logger.info("measure=\(name.description, privacy: .public) ms=\(milliseconds, privacy: .public)")
     }
 
     private func describe(_ attributes: [String: TelemetryValue]) -> String {
