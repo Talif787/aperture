@@ -65,9 +65,10 @@ source ~/.bashrc
 make doctor                     # reports what this machine can build
 ```
 
-Then follow [SETUP.md](SETUP.md), which covers GitHub repository creation, branch
-protection, Google Cloud project setup, and keyless CI credentials through Workload
-Identity Federation.
+Then follow [SETUP.md](SETUP.md). Steps 1 through 9 cover everything needed to develop:
+toolchain, GitHub repository, branch protection, and CI. Steps 10 through 13 are Google
+Cloud setup and are deliberately deferred until Phase 11, since nothing before then
+deploys anywhere.
 
 **On macOS**, from a clone:
 
