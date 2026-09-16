@@ -27,6 +27,52 @@ YAML_PATTERNS = [
 JSON_PATTERNS = ["contracts/**/*.json", "ios/**/*.xcassets/**/*.json"]
 
 
+
+def check_golangci_version_alignment() -> list[str]:
+    """The golangci-lint config schema and the action major version must agree.
+
+    golangci-lint v1 and v2 have incompatible configuration schemas, and neither binary
+    contains the other's parser. A v2 config run by a v1 binary fails with a wall of
+    JSON-schema errors that says nothing about the actual cause.
+    """
+    config = REPO_ROOT / "backend" / ".golangci.yml"
+    workflow = REPO_ROOT / ".github" / "workflows" / "pr.yml"
+    if not config.is_file() or not workflow.is_file():
+        return []
+
+    config_text = config.read_text(encoding="utf-8")
+    workflow_text = workflow.read_text(encoding="utf-8")
+
+    declares_v2 = 'version: "2"' in config_text or "version: '2'" in config_text
+    action_major = None
+    for line in workflow_text.splitlines():
+        if "golangci/golangci-lint-action@v" in line:
+            action_major = line.split("golangci-lint-action@v", 1)[1].split()[0]
+            break
+
+    if action_major is None:
+        return []
+
+    try:
+        major = int(action_major.split(".")[0])
+    except ValueError:
+        return [f"{workflow}: cannot parse the golangci-lint-action version '{action_major}'"]
+
+    if declares_v2 and major < 8:
+        return [
+            f"backend/.golangci.yml declares schema version 2, but pr.yml pins "
+            f"golangci-lint-action@v{action_major}. Version 8 or newer is required, "
+            f"because earlier majors install a golangci-lint v1 binary."
+        ]
+    if not declares_v2 and major >= 8:
+        return [
+            f"pr.yml pins golangci-lint-action@v{action_major}, which installs a v2 "
+            f"binary, but backend/.golangci.yml is not a version 2 config."
+        ]
+    print("golangci-lint: config schema and action version agree")
+    return []
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -55,6 +101,8 @@ def main() -> int:
             except yaml.YAMLError as error:
                 failures.append(f"{path}: {error}")
         print(f"YAML: {len(yaml_paths)} file(s) parsed")
+
+    failures.extend(check_golangci_version_alignment())
 
     if failures:
         print("\nConfiguration errors:")

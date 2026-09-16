@@ -88,10 +88,14 @@ jobs:
         run: go test -race -count=1 ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        # Action v8 requires golangci-lint v2.1.0 or newer. The two schemas are not
+        # interchangeable: the v2 binary does not contain the v1 config parser, and v6 of
+        # this action installs a v1 binary, which rejects backend/.golangci.yml outright.
+        # If the config is ever migrated back to v1, this pin must move back to v6.
+        uses: golangci/golangci-lint-action@v8
         with:
           working-directory: backend
-          version: latest
+          version: v2.1
 
   swift-lint:
     name: SwiftLint

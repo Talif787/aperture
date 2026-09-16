@@ -102,6 +102,8 @@ type statusRecorder struct {
 	status int
 }
 
+// WriteHeader records the status before delegating, so the access log can report it
+// without every handler having to cooperate.
 func (recorder *statusRecorder) WriteHeader(code int) {
 	recorder.status = code
 	recorder.ResponseWriter.WriteHeader(code)

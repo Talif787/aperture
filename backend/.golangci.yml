@@ -26,8 +26,10 @@ linters:
         - G104
     revive:
       rules:
+        # No checkPrivateReceivers: Go convention does not require doc comments on
+        # methods of unexported types, and requiring them produces noise on every
+        # internal helper without improving the public API surface.
         - name: exported
-          arguments: ["checkPrivateReceivers"]
         - name: context-as-argument
         - name: error-return
         - name: error-strings
