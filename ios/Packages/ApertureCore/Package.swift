@@ -24,8 +24,18 @@ let package = Package(
         .library(name: "ApertureDomain", targets: ["ApertureDomain"]),
         .library(name: "ApertureSync", targets: ["ApertureSync"]),
         .library(name: "ApertureNetworking", targets: ["ApertureNetworking"]),
+        .library(name: "ApertureAuth", targets: ["ApertureAuth"]),
         .library(name: "ApertureContracts", targets: ["ApertureContracts"]),
         .library(name: "ApertureTestSupport", targets: ["ApertureTestSupport"])
+    ],
+    dependencies: [
+        // swift-crypto is Apple's own package and exposes the CryptoKit API on Linux, so
+        // the PKCE digest runs the same code on a device, on a Linux CI runner, and in the
+        // Cloud Shell container. The alternative was a hand-written SHA-256, which would
+        // have avoided a dependency at the cost of putting a security-relevant primitive
+        // in code nobody has audited. For a digest on the authentication path that is the
+        // wrong trade.
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0")
     ],
     targets: [
         .target(
@@ -36,6 +46,14 @@ let package = Package(
         .target(
             name: "ApertureSync",
             dependencies: ["ApertureDomain"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "ApertureAuth",
+            dependencies: [
+                "ApertureDomain",
+                .product(name: "Crypto", package: "swift-crypto")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
@@ -50,7 +68,7 @@ let package = Package(
         ),
         .target(
             name: "ApertureTestSupport",
-            dependencies: ["ApertureDomain", "ApertureSync", "ApertureNetworking"],
+            dependencies: ["ApertureDomain", "ApertureSync", "ApertureNetworking", "ApertureAuth"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -66,6 +84,11 @@ let package = Package(
         .testTarget(
             name: "ApertureNetworkingTests",
             dependencies: ["ApertureNetworking", "ApertureTestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "ApertureAuthTests",
+            dependencies: ["ApertureAuth", "ApertureTestSupport"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

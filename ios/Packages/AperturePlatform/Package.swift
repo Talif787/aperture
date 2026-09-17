@@ -43,7 +43,8 @@ let package = Package(
         .target(
             name: "ApertureSecurity",
             dependencies: [
-                .product(name: "ApertureDomain", package: "ApertureCore")
+                .product(name: "ApertureDomain", package: "ApertureCore"),
+                .product(name: "ApertureAuth", package: "ApertureCore")
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),

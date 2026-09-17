@@ -101,6 +101,19 @@ func run(cfg config, logger *slog.Logger) error {
 		})
 	})
 
+	// Catch-all, so an unmatched route answers in the same error envelope as every other
+	// failure. Go's default handler returns "404 page not found" as plain text, and the
+	// client treats a non-2xx with an unparseable body as a transport anomaly rather than
+	// as an API error. A mistyped path would therefore be reported as a corrupt response,
+	// which is a confusing way to discover a typo.
+	//
+	// It deliberately does not list the available routes. A route index is a small
+	// information disclosure, and the convenience it buys is one line in a runbook.
+	mux.HandleFunc("/", func(writer http.ResponseWriter, request *http.Request) {
+		writeError(writer, request, http.StatusNotFound, "NOT_FOUND",
+			"No route matches this path.")
+	})
+
 	handler := httpx.Chain(mux,
 		httpx.WithRecovery(logger),
 		httpx.WithCorrelationID,
@@ -160,6 +173,22 @@ func run(cfg config, logger *slog.Logger) error {
 		logger.Info("stopped cleanly")
 		return nil
 	}
+}
+
+// writeError emits the uniform error envelope the API contract defines.
+//
+// The message is for engineers and logs. The client maps `code` to a localised string and
+// never displays this text, which is why it can name internals without consequence.
+func writeError(writer http.ResponseWriter, request *http.Request, status int, code, message string) {
+	writeJSON(writer, status, map[string]any{
+		"error": map[string]any{
+			"code":           code,
+			"http_status":    status,
+			"message":        message,
+			"retryable":      false,
+			"correlation_id": obs.CorrelationID(request.Context()),
+		},
+	})
 }
 
 func writeJSON(writer http.ResponseWriter, status int, body any) {

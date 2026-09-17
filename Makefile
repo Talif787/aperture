@@ -138,6 +138,36 @@ backend-down: ## Stop the local stack
 backend-logs: ## Tail the local stack logs
 	@docker compose -f $(COMPOSE) logs -f
 
+# ------------------------------------------------------------------------ database
+
+.PHONY: db-status
+db-status: ## What exists in the local database right now
+	@./scripts/db.sh status
+
+.PHONY: db-migrate
+db-migrate: ## Apply migrations and create the application role
+	@./scripts/db.sh migrate
+
+.PHONY: db-baseline
+db-baseline: ## Record existing migrations as applied, for a database created before tracking
+	@./scripts/db.sh baseline
+
+.PHONY: db-seed
+db-seed: ## Insert the development fixtures
+	@./scripts/db.sh seed
+
+.PHONY: db-verify
+db-verify: ## Prove tenant isolation adversarially, as the application role
+	@./scripts/db.sh verify-rls
+
+.PHONY: db-reset
+db-reset: ## Destroy the volume and rebuild, migrate, and seed from nothing
+	@./scripts/db.sh reset
+
+.PHONY: db-psql
+db-psql: ## Interactive psql as the bootstrap role
+	@./scripts/db.sh psql
+
 # ---------------------------------------------------------------------------- formatting
 
 .PHONY: format
