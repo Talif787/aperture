@@ -12,12 +12,14 @@ import ApertureDomain
 /// It also carries the fault injection the durability work needs: `failNextWrite` and
 /// `simulateTermination` let a test reproduce a crash at an exact point in a sequence,
 /// which is how the twelve-point kill matrix in Phase 5 is driven.
-public final class InMemoryInspectionRepository: InspectionRepository, MediaRepository, SyncOperationSink, Sendable {
+public final class InMemoryInspectionRepository: InspectionRepository, MediaRepository,
+                                                 SyncOperationSink, TransactionRunner, Sendable {
     private struct Storage {
         var inspections: [InspectionID: Inspection] = [:]
         var media: [MediaID: MediaAsset] = [:]
         var operations: [PendingOperation] = []
         var failNextWrite: (any Error)?
+        var failNextCommit: Bool = false
         var writeCount: Int = 0
     }
 
@@ -136,6 +138,58 @@ public final class InMemoryInspectionRepository: InspectionRepository, MediaRepo
         }
     }
 
+    // MARK: - TransactionRunner
+
+    /// Runs work atomically, restoring the previous state when it fails.
+    ///
+    /// The store is its own transaction runner because a runner that cannot see the store
+    /// cannot undo anything. The previous version ran the body, then threw, and left every
+    /// write in place, so a test asserting "nothing was recorded" was asserting against a
+    /// double that could not have rolled back under any circumstances. A fake that cannot
+    /// fail the way the real thing fails is worse than no fake: it reports success for
+    /// behavior nobody has verified.
+    public func inTransaction<T: Sendable>(_ work: @Sendable () async throws -> T) async throws -> T {
+        let snapshot = storage.withLock { $0 }
+
+        do {
+            let result = try await work()
+
+            let shouldFail = storage.withLock { current -> Bool in
+                defer { current.failNextCommit = false }
+                return current.failNextCommit
+            }
+
+            if shouldFail {
+                restore(snapshot)
+                throw DomainError.unrecoverable(code: "ERR-4801", correlationID: "test")
+            }
+
+            return result
+        } catch {
+            restore(snapshot)
+            throw error
+        }
+    }
+
+    /// The next commit fails after its body has run, modelling a write that reaches the
+    /// database and then does not survive.
+    public func failNextCommit() {
+        storage.withLock { $0.failNextCommit = true }
+    }
+
+    private func restore(_ snapshot: Storage) {
+        storage.withLock { current in
+            // The fault-injection switches are deliberately not restored. Rolling back a
+            // test's own instructions to the double would make a single-shot failure fire
+            // twice.
+            let writeCount = current.writeCount
+            current = snapshot
+            current.writeCount = writeCount
+            current.failNextWrite = nil
+            current.failNextCommit = false
+        }
+    }
+
     // MARK: - SyncOperationSink
 
     public func enqueue(_ operation: PendingOperation) async throws {
@@ -150,11 +204,12 @@ public final class InMemoryInspectionRepository: InspectionRepository, MediaRepo
     }
 }
 
-/// Runs work without a real transaction, and can be made to fail partway.
+/// Runs work and can be made to fail, **without rolling anything back**.
 ///
-/// The atomicity this stands in for is the important part: an entity write and the sync
-/// operation it produces must commit together, or a crash between them leaves an edit the
-/// user can see and the server will never hear about.
+/// For tests that need a transaction boundary to exist but do not assert on what survives
+/// a failure. Anything checking rollback must use `InMemoryInspectionRepository`, which is
+/// its own runner and can restore its own state. The distinction is spelled out because
+/// the two look interchangeable at the call site and are not.
 public final class InMemoryTransactionRunner: TransactionRunner, Sendable {
     private let shouldFail: Mutex<Bool>
 

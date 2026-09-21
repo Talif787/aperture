@@ -71,6 +71,13 @@ let package = Package(
             dependencies: ["ApertureDomain", "ApertureSync", "ApertureNetworking", "ApertureAuth"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // A development tool, not part of the application. It is in this package so it
+        // compiles on Linux alongside the logic it exercises.
+        .executableTarget(
+            name: "ApertureScenarios",
+            dependencies: ["ApertureDomain", "ApertureTestSupport"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "ApertureDomainTests",
             dependencies: ["ApertureDomain", "ApertureTestSupport"],

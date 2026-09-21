@@ -83,6 +83,12 @@ core-shell-docker: ## Interactive shell in the Swift container, at the package r
 	@docker run --rm -it -u $(shell id -u):$(shell id -g) -e HOME=/tmp \
 		-v "$(CURDIR)/$(CORE_PKG)":/pkg -w /pkg $(SWIFT_IMAGE) bash
 
+.PHONY: scenario
+scenario: ## Run a domain scenario in the container: make scenario ARGS="template '{}'"
+	@docker run --rm -u $(shell id -u):$(shell id -g) -e HOME=/tmp \
+		-v "$(CURDIR)/$(CORE_PKG)":/pkg -w /pkg $(SWIFT_IMAGE) \
+		swift run ApertureScenarios $(ARGS)
+
 # --------------------------------------------------------------------- iOS [macOS only]
 
 .PHONY: project
