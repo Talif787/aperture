@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 type contextKey string
@@ -82,11 +83,42 @@ func WithCorrelationID(ctx context.Context, id string) context.Context {
 }
 
 // CorrelationID returns the identifier stored by WithCorrelationID, or the empty string.
+//
+// Nil-tolerant. `ctx.Value` panics on a nil context, and the places that reach for a
+// correlation identifier are error paths and response writers, which is exactly where a
+// panic is least welcome and most likely: the code that handles a failure is the code
+// least often exercised.
 func CorrelationID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
 	if value, ok := ctx.Value(correlationIDKey).(string); ok {
 		return value
 	}
 	return ""
+}
+
+// SetDefaultLogger installs the process logger for packages that log without being handed
+// one. Called once from main, before any handler is mounted.
+func SetDefaultLogger(logger *slog.Logger) {
+	defaultLogger.Store(logger)
+}
+
+var defaultLogger atomic.Pointer[slog.Logger]
+
+// Logger returns a logger annotated with the context's correlation identifier.
+//
+// Falls back to slog's default when main has not installed one, which keeps a library
+// package from panicking in a test binary that never calls SetDefaultLogger.
+func Logger(ctx context.Context) *slog.Logger {
+	base := defaultLogger.Load()
+	if base == nil {
+		base = slog.Default()
+	}
+	if ctx == nil {
+		return base
+	}
+	return FromContext(ctx, base)
 }
 
 // FromContext returns a logger already annotated with the request correlation identifier.

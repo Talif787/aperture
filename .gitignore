@@ -49,3 +49,8 @@ node_modules/
 __pycache__/
 *.pyc
 .tool-cache/
+
+# Local development artifacts: built binaries, the signing key, the service log.
+# The key signs tokens the local service accepts, so it is a credential even though it is
+# only local, and it must never reach the repository.
+.dev/

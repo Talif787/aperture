@@ -152,6 +152,56 @@ backend-down: ## Stop the local stack
 backend-logs: ## Tail the local stack logs
 	@docker compose -f $(COMPOSE) logs -f
 
+# ----------------------------------------------------------------------------- API
+
+DEV_DIR := $(CURDIR)/.dev
+
+.PHONY: api-build
+api-build: ## Build the service and the development token tool
+	@mkdir -p $(DEV_DIR)
+	@cd backend && go build -o $(DEV_DIR)/aperture ./cmd/aperture
+	@cd backend && go build -o $(DEV_DIR)/devtoken ./cmd/devtoken
+	@echo "built $(DEV_DIR)/aperture and $(DEV_DIR)/devtoken"
+
+.PHONY: api-keygen
+api-keygen: api-build ## Generate the local signing key and its key set
+	@$(DEV_DIR)/devtoken keygen -key $(DEV_DIR)/dev-key.pem -out $(DEV_DIR)/dev-jwks.json
+
+.PHONY: api-up
+api-up: api-keygen ## Start the service in the background with token verification enabled
+	@APERTURE_JWKS_PATH=$(DEV_DIR)/dev-jwks.json \
+		APERTURE_ENVIRONMENT=local \
+		APERTURE_LOG_LEVEL=debug \
+		nohup $(DEV_DIR)/aperture > $(DEV_DIR)/aperture.log 2>&1 & echo $$! > $(DEV_DIR)/aperture.pid
+	@for i in $$(seq 1 30); do \
+		curl -sf http://localhost:8080/healthz >/dev/null && break; \
+		sleep 0.2; \
+	done
+	@echo "service running, pid $$(cat $(DEV_DIR)/aperture.pid), log $(DEV_DIR)/aperture.log"
+
+.PHONY: api-down
+api-down: ## Stop the background service
+	@if [ -f $(DEV_DIR)/aperture.pid ]; then \
+		kill $$(cat $(DEV_DIR)/aperture.pid) 2>/dev/null || true; \
+		rm -f $(DEV_DIR)/aperture.pid; \
+		echo "stopped"; \
+	else echo "not running"; fi
+
+.PHONY: api-logs
+api-logs: ## Tail the service log
+	@tail -f $(DEV_DIR)/aperture.log
+
+.PHONY: api-token
+api-token: ## Mint a token: make api-token TENANT=<uuid> SUBJECT=<sub> [ROLES=inspector]
+	@$(DEV_DIR)/devtoken mint -key $(DEV_DIR)/dev-key.pem \
+		-tenant $(or $(TENANT),11111111-1111-4111-a111-111111111111) \
+		-subject $(or $(SUBJECT),00uDANA0001) \
+		-roles $(or $(ROLES),inspector)
+
+.PHONY: api-scenarios
+api-scenarios: ## Run every API scenario against the running service
+	@./scripts/api_scenarios.sh
+
 # ------------------------------------------------------------------------ database
 
 .PHONY: db-status

@@ -22,8 +22,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/talif/aperture/backend/internal/authn"
+	"github.com/talif/aperture/backend/internal/httpapi"
 	"github.com/talif/aperture/backend/internal/httpx"
 	"github.com/talif/aperture/backend/internal/obs"
+	"github.com/talif/aperture/backend/internal/syncapi"
 )
 
 const (
@@ -52,13 +55,29 @@ type config struct {
 	addr        string
 	logLevel    string
 	environment string
+
+	// Token verification. In production these come from the tenant's provider; locally a
+	// file-backed key set lets the real verification path run against a key you control.
+	jwksPath  string
+	issuer    string
+	audience  string
+	keySetTTL time.Duration
+
+	// Clients older than this are refused with a specific version rather than a generic
+	// error, so the app can tell the user what to do.
+	minimumClientVersion string
 }
 
 func loadConfig() config {
 	return config{
-		addr:        envOrDefault("APERTURE_HTTP_ADDR", ":8080"),
-		logLevel:    envOrDefault("APERTURE_LOG_LEVEL", "info"),
-		environment: envOrDefault("APERTURE_ENVIRONMENT", "local"),
+		addr:                 envOrDefault("APERTURE_HTTP_ADDR", ":8080"),
+		logLevel:             envOrDefault("APERTURE_LOG_LEVEL", "info"),
+		environment:          envOrDefault("APERTURE_ENVIRONMENT", "local"),
+		jwksPath:             envOrDefault("APERTURE_JWKS_PATH", ""),
+		issuer:               envOrDefault("APERTURE_TOKEN_ISSUER", "https://dev.aperture.local"),
+		audience:             envOrDefault("APERTURE_TOKEN_AUDIENCE", "aperture-api"),
+		keySetTTL:            time.Hour,
+		minimumClientVersion: envOrDefault("APERTURE_MINIMUM_CLIENT_VERSION", "0.1.0"),
 	}
 }
 
@@ -77,7 +96,44 @@ func run(cfg config, logger *slog.Logger) error {
 	// receive traffic", and only the second one depends on the database.
 	var ready atomic.Bool
 
+	obs.SetDefaultLogger(logger)
+
 	mux := http.NewServeMux()
+
+	// The sync endpoints mount only when a key set is configured.
+	//
+	// Refusing to serve them unauthenticated is deliberate. An endpoint that silently
+	// falls back to no verification when configuration is missing is a production incident
+	// waiting for one bad deploy, and the failure is invisible: the service looks healthy
+	// and answers every request.
+	if cfg.jwksPath != "" {
+		keys := authn.NewFileKeySource(cfg.jwksPath, cfg.keySetTTL)
+		authenticator := httpapi.Authenticator{
+			Verifier: authn.Verifier{
+				Keys:     keys,
+				Issuer:   cfg.issuer,
+				Audience: cfg.audience,
+			},
+		}
+
+		// In-memory for now. The store is behind an interface precisely so the protocol
+		// logic could be finished and tested before the persistence layer existed; the
+		// PostgreSQL implementation replaces this one line and nothing else.
+		//
+		// State is lost on restart, which is correct for local development and is why the
+		// runbook mints a token and pushes in the same session.
+		handlers := httpapi.Handlers{
+			Sync: syncapi.NewService(syncapi.NewInMemoryStore(time.Now), time.Now),
+		}
+		handlers.Register(mux, authenticator, cfg.minimumClientVersion)
+
+		logger.Info("sync endpoints mounted",
+			slog.String("jwks_path", cfg.jwksPath),
+			slog.String("issuer", cfg.issuer),
+			slog.String("minimum_client_version", cfg.minimumClientVersion))
+	} else {
+		logger.Warn("sync endpoints disabled: set APERTURE_JWKS_PATH to enable them")
+	}
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]string{
 			"status":  "ok",
