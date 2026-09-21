@@ -52,16 +52,21 @@ docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'swift|postgres' || 
 echo "--- containers ---"
 docker ps --format '{{.Names}}\t{{.Status}}' || echo "none running"
 
-echo "--- database volume (persists across VM recycles) ---"
-docker volume ls --format '{{.Name}}' | grep -i aperture || echo "no aperture volume"
+echo "--- database volume (does NOT survive a VM recycle) ---"
+docker volume ls --format '{{.Name}}' | grep -i aperture || echo "no aperture volume: rebuild with make db-reset"
 
 echo "--- archive integrity ---"
 ls -la ~/aperture-phase-4a.zip 2>/dev/null && md5sum ~/aperture-phase-4a.zip
 echo "  compare against the MD5 published with the archive"
 ```
 
-Expected on a fresh session: the repository is present because `$HOME` persists, images are
-gone, containers are gone, the named volume survives.
+Expected on a fresh session: the repository is present because `$HOME` persists, and
+everything Docker holds is gone.
+
+**Docker volumes do not survive a VM recycle.** They live on the VM's ephemeral disk, which
+is the same fact that keeps container images off your 5 GB `$HOME` quota. The database is
+therefore disposable by design: it holds only seed fixtures, and rebuilding it takes about
+thirty seconds. Nothing of value should ever live only in that volume.
 
 ---
 
@@ -186,13 +191,16 @@ machine**, and **Device conditions**.
 Run one suite at a time:
 
 ```bash
-make core-shell-docker
-# inside the container:
-swift test --filter "Template engine"
-swift test --filter "Capture durability"
-swift test --filter "Capture state machine"
-exit
+cd ~/aperture
+make suites                       # every suite, with the identifier --filter matches
+make core-test-filter FILTER="TemplateEngineTests"
+make core-test-filter FILTER="CaptureMediaTests"
+make core-test-filter FILTER="CaptureStateTests"
 ```
+
+**`--filter` matches the Swift type name, not the `@Suite` display string.** "Capture
+durability" is `CaptureMediaTests`. A filter matching nothing exits successfully with
+"No matching test cases were run", which reads like a pass.
 
 ---
 
@@ -348,9 +356,8 @@ These have no command-line equivalent, because the sequence they assert is an or
 rather than a value. They run as tests:
 
 ```bash
-make core-shell-docker
-swift test --filter "Capture durability"
-exit
+cd ~/aperture
+make core-test-filter FILTER="CaptureMediaTests"
 ```
 
 | Scenario | Assertion |
@@ -401,7 +408,8 @@ make scenario ARGS="template '{}'" >/dev/null && echo "6/6 scenario tool"
 | `.build` permission denied | An earlier container ran as root | `sudo chown -R $(id -u):$(id -g) ios/Packages/ApertureCore/.build` |
 | `make core-test-docker` cannot resolve swift-crypto | No egress from the container | `docker run --rm swift:6.3 curl -sI https://github.com` |
 | `port is already allocated` | Another Postgres or service | `docker ps`, stop it, or change the port in `.env` |
-| `db-status` shows no tables | Volume destroyed by a prune | `make db-reset` |
+| `db-status` shows no tables, no role, no migrations | The volume is gone: VM recycle, `down -v`, or a prune | `make db-migrate && make db-seed`, or `make db-reset` |
+| `db-verify` reports `aperture_app does not exist` | Same cause, seen from the other end | Same fix |
 | `db-migrate` says a file was edited after it was applied | A migration changed after running | Write a new migration, or `make db-reset` |
 | `db-verify` reports tenant A sees 4 users | Connected as a superuser | The script uses `aperture_app`; confirm with `\du` |
 | Everything worked yesterday, nothing today | VM recycled: images gone, `$HOME` kept | Part 2, then Part 4 |

@@ -1,5 +1,6 @@
 import Foundation
 import ApertureDomain
+import ApertureSync
 import ApertureTestSupport
 
 /// A development tool for exercising domain policy by hand.
@@ -30,6 +31,23 @@ case "thermal":
     runThermal(argument: arguments.count > 1 ? arguments[1] : "nominal")
 case "fields":
     printTemplateDefinition()
+case "policy":
+    printConflictPolicy()
+case "conflict":
+    runConflict(
+        local: arguments.count > 1 ? arguments[1] : "",
+        remote: arguments.count > 2 ? arguments[2] : "",
+        localClock: arguments.count > 3 ? UInt64(arguments[3]) ?? 2000 : 2000,
+        remoteClock: arguments.count > 4 ? UInt64(arguments[4]) ?? 1000 : 1000
+    )
+case "merge":
+    runMerge(first: arguments.count > 1 ? arguments[1] : "",
+             second: arguments.count > 2 ? arguments[2] : "")
+case "converge":
+    await runConverge(
+        seed: arguments.count > 1 ? UInt64(arguments[1]) ?? 1 : 1,
+        steps: arguments.count > 2 ? Int(arguments[2]) ?? 60 : 60
+    )
 default:
     printUsage()
     exit(1)
@@ -322,10 +340,24 @@ func printUsage() {
       fields
           The fixture template, with every condition spelled out.
 
+      policy
+          The per-field conflict policy table.
+
+      conflict <local,fields> <remote,fields> [localClockMs] [remoteClockMs]
+          What resolution decides for a concurrent change.
+
+      merge '<inspector text>' '<reviewer text>'
+          Note merging, with the algebraic properties checked.
+
+      converge <seed> [steps]
+          A generated history of edits, failures and terminations, replayed.
+
     Examples
       swift run ApertureScenarios fields
       swift run ApertureScenarios template '{"roof_material":"other"}'
       swift run ApertureScenarios template '{"roof_material":"asphalt_shingle","slope_degrees":45}'
       swift run ApertureScenarios storage 400MB
+      swift run ApertureScenarios conflict measurement_value measurement_value
+      swift run ApertureScenarios converge 42 80
     """)
 }

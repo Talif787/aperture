@@ -620,6 +620,7 @@ matters when the audience is a hiring committee rather than a team.
 | Anything outside `$HOME` | **No** | A system-level `apt install` is gone after the VM recycles |
 | Running processes | **No** | The VM recycles after roughly an hour of inactivity |
 | `~/.customize_environment` | Yes, and re-runs as root on every VM boot | The supported way to restore system packages. `cloudshell_setup.sh` writes it |
+| Docker images and volumes | **No** | They live on the VM's ephemeral disk, which is the same reason they do not count against the 5 GB `$HOME` quota. The local database is disposable by design: `make db-reset` rebuilds it in about thirty seconds |
 | Environment variables | Only through `~/.bashrc` | Which is why Steps 8, 10, and 12 append to it |
 
 ### Useful commands

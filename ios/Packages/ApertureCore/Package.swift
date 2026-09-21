@@ -75,7 +75,7 @@ let package = Package(
         // compiles on Linux alongside the logic it exercises.
         .executableTarget(
             name: "ApertureScenarios",
-            dependencies: ["ApertureDomain", "ApertureTestSupport"],
+            dependencies: ["ApertureDomain", "ApertureSync", "ApertureTestSupport"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

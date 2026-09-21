@@ -78,6 +78,14 @@ core-build-docker: ## Build ApertureCore in a container, no local Swift required
 core-test-docker: ## Test ApertureCore in a container, no local Swift required
 	@$(DOCKER_SWIFT) swift test
 
+.PHONY: core-test-filter
+core-test-filter: ## Run one suite in the container: make core-test-filter FILTER="ConvergenceTests"
+	@$(DOCKER_SWIFT) swift test --filter "$(FILTER)"
+
+.PHONY: suites
+suites: ## List every suite with the identifier --filter matches
+	@python3 scripts/list_suites.py $(NAME)
+
 .PHONY: core-shell-docker
 core-shell-docker: ## Interactive shell in the Swift container, at the package root
 	@docker run --rm -it -u $(shell id -u):$(shell id -g) -e HOME=/tmp \

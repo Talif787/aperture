@@ -455,13 +455,16 @@ make db-verify      && echo "5/5 tenant isolation"
 The four Phase 3 Swift suites specifically:
 
 ```bash
-make core-shell-docker
-# inside the container:
-swift test --filter "PKCE"
-swift test --filter "Session policy"
-swift test --filter "Token refresh coordination"
-exit
+cd ~/aperture
+make suites                     # every suite, with the identifier --filter matches
+make core-test-filter FILTER="PKCETests"
+make core-test-filter FILTER="SessionPolicyTests"
+make core-test-filter FILTER="TokenRefreshCoordinatorTests"
 ```
+
+**`--filter` matches the Swift type name, not the `@Suite` display string.** A filter that
+matches nothing exits successfully with "No matching test cases were run", which reads like
+a pass.
 
 ---
 
@@ -486,7 +489,7 @@ exit
 | `db-migrate` fails with `relation "tenants" already exists` | Schema predates migration tracking | `make db-baseline`, then `make db-migrate` |
 | `db-migrate` reports a file was edited after it was applied | A migration was changed after running | Write a new migration, or `make db-reset` to rebuild |
 | Migration fails on `CREATE EXTENSION` | Image lacks the extension | `postgres:16-alpine` has both `pgcrypto` and `citext`; confirm the image tag |
-| Everything worked yesterday, nothing today | VM recycled: images and containers are gone, `$HOME` is not | Part 2, then Part 4 |
+| Everything worked yesterday, nothing today | VM recycled: images, containers **and volumes** are gone, `$HOME` is not | Part 2, Part 4, then `make db-migrate && make db-seed` |
 | Database empty after a restart | The volume was pruned | `make db-reset` |
 | `go: command not found` | PATH not reloaded | `source ~/.bashrc` |
 | Go tests fail to build | Module cache | `cd backend && go clean -modcache && go mod download` |

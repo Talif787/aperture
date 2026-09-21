@@ -18,6 +18,11 @@ public enum SyncOperationState: String, Sendable, CaseIterable, Codable {
     public func canTransition(to next: SyncOperationState) -> Bool {
         switch (self, next) {
         case (.pending, .inFlight),
+             // A failed operation is ours to retry once its backoff elapses, so it goes
+             // straight back out rather than round-tripping through pending. Omitting this
+             // left failed operations permanently undispatchable: never retried, never
+             // dead-lettered, and counted as queued work that could not move.
+             (.failed, .inFlight),
              (.inFlight, .failed),
              (.inFlight, .pending),
              (.failed, .pending),
@@ -30,8 +35,12 @@ public enum SyncOperationState: String, Sendable, CaseIterable, Codable {
     }
 
     /// Whether the queue should attempt to send this operation.
+    ///
+    /// Both pending and failed qualify. Failed means "the last attempt did not land", not
+    /// "give up": the backoff deadline decides when it goes out again, and `dead` is the
+    /// only state that stops trying.
     public var isEligibleForDispatch: Bool {
-        self == .pending
+        self == .pending || self == .failed
     }
 
     /// Whether the operation requires user attention rather than another retry.
