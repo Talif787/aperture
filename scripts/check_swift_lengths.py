@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Approximate SwiftLint's length rules locally, before a push.
+"""Approximate SwiftLint's structural rules locally, before a push.
 
 SwiftLint counts function bodies *excluding comments and whitespace*. A raw line count
 therefore flags every heavily commented function in this codebase, which is most of them,
@@ -32,6 +32,13 @@ LINE_WARNING = 120
 # every dependency's sources under .build, and linting code we did not write buried three
 # real findings under twelve hundred imaginary ones.
 SKIPPED_DIRECTORIES = {".build", "checkouts", "DerivedData", "Generated"}
+
+# Rules beyond length that CI kept finding and this script kept missing. Every one of them
+# cost a round trip, which is the argument for approximating them here even though the
+# approximation is cruder than the real rule.
+TUPLE_RETURN_PATTERN = re.compile(r'->\s*\(([^)]*)\)\s*\{?\s*$')
+BLANKET_DISABLE_PATTERN = re.compile(r'//\s*swiftlint:disable\s+(?!next|this|previous)(\w+)')
+DOC_COMMENT_PATTERN = re.compile(r'^\s*///')
 
 FUNCTION_PATTERN = re.compile(
     r'^\s*(?:@\w+\s+)*(?:public |private |internal |fileprivate |static |final |override |mutating )*'
@@ -96,9 +103,51 @@ def main() -> int:
             if len(lines) > FILE_WARNING:
                 findings.append(f"{relative}: file is {len(lines)} lines (limit {FILE_WARNING})")
 
+            if text and not text.endswith("\n"):
+                findings.append(f"{relative}: no trailing newline")
+            elif text.endswith("\n\n"):
+                findings.append(f"{relative}: more than one trailing newline")
+
+            blank_run = 0
             for number, line in enumerate(lines, 1):
                 if len(line) > LINE_WARNING:
                     findings.append(f"{relative}:{number}: line is {len(line)} characters")
+
+                if not line.strip():
+                    blank_run += 1
+                    if blank_run == 2:
+                        findings.append(
+                            f"{relative}:{number}: more than one consecutive blank line"
+                        )
+                else:
+                    blank_run = 0
+
+                disable = BLANKET_DISABLE_PATTERN.search(line)
+                if disable:
+                    findings.append(
+                        f"{relative}:{number}: blanket disable of {disable.group(1)}; "
+                        f"use :next, :this, :previous, or the configuration file"
+                    )
+
+                # A tuple of three or more members should be a named type. Positional
+                # access reads as .0 and .2, and a swap between two same-typed members is
+                # invisible at the call site.
+                tuple_match = TUPLE_RETURN_PATTERN.search(line)
+                if tuple_match and tuple_match.group(1).count(",") >= 2:
+                    findings.append(
+                        f"{relative}:{number}: returns a tuple of "
+                        f"{tuple_match.group(1).count(',') + 1} members"
+                    )
+
+            # A doc comment must attach to a declaration. One separated from the next line
+            # by a blank line documents nothing and reads as if it does.
+            for number, line in enumerate(lines):
+                if not DOC_COMMENT_PATTERN.match(line):
+                    continue
+                following = lines[number + 1] if number + 1 < len(lines) else ""
+                if DOC_COMMENT_PATTERN.match(following) or following.strip():
+                    continue
+                findings.append(f"{relative}:{number + 1}: doc comment attached to nothing")
 
             for index, line in enumerate(lines):
                 # A declaration that does not open a brace on its own line is a protocol
@@ -138,7 +187,7 @@ def main() -> int:
         print(f"\n{len(findings)} finding(s). SwiftLint runs with --strict, so these fail CI.")
         return 1
 
-    print("Swift lengths OK: functions, type bodies, files, and line widths.")
+    print("Swift structure OK: lengths, widths, tuples, doc comments, whitespace.")
     return 0
 
 

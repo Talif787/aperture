@@ -1,11 +1,14 @@
 import Foundation
 
-/// The ports the domain defines and the data layer implements.
-///
-/// These are declared here, alongside the entities they serve, rather than next to their
-/// implementations. That is what lets the domain be compiled and tested with no database,
-/// no network, and no simulator, which in turn is what keeps the hardest logic in the
-/// product covered by the fastest tests.
+// The ports the domain defines and the data layer implements.
+//
+// Declared here, alongside the entities they serve, rather than next to their
+// implementations. That is what lets the domain be compiled and tested with no database,
+// no network, and no simulator, which in turn is what keeps the hardest logic in the
+// product covered by the fastest tests.
+//
+// Ordinary comments rather than doc comments: a `///` block attaches to the declaration
+// below it, and this one describes the file.
 
 /// Read and write access to inspections.
 public protocol InspectionRepository: Sendable {

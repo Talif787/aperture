@@ -8,11 +8,21 @@ import ApertureTestSupport
 @Suite("Resilient client")
 struct ResilientClientTests {
 
+    /// The pieces one client test needs.
+    ///
+    /// A named type rather than a three-member tuple, so a test reads `harness.sleeper`
+    /// instead of destructuring three values in the right order at every call site.
+    private struct ClientHarness {
+        let client: ResilientClient
+        let sleeper: RecordingSleeper
+        let dateProvider: TestDateProvider
+    }
+
     private func makeClient(
         transport: StubTransport,
         sleeper: RecordingSleeper = RecordingSleeper(),
         policy: RetryPolicy = .standard
-    ) -> (ResilientClient, RecordingSleeper, TestDateProvider) {
+    ) -> ClientHarness {
         let dateProvider = TestDateProvider()
         let breaker = CircuitBreaker(failureThreshold: 5, cooldown: 30, dateProvider: dateProvider)
         let client = ResilientClient(
@@ -22,7 +32,7 @@ struct ResilientClientTests {
             random: SeededRandomSource(seed: 99),
             sleep: { seconds in try await sleeper.sleep(seconds) }
         )
-        return (client, sleeper, dateProvider)
+        return ClientHarness(client: client, sleeper: sleeper, dateProvider: dateProvider)
     }
 
     private func request(
@@ -40,7 +50,9 @@ struct ResilientClientTests {
     @Test("a successful response is returned without retrying")
     func successPath() async throws {
         let transport = StubTransport(outcomes: [.respond(HTTPResponse(statusCode: 200))])
-        let (client, sleeper, _) = makeClient(transport: transport)
+        let harness = makeClient(transport: transport)
+        let client = harness.client
+        let sleeper = harness.sleeper
 
         let response = try await client.send(request())
 
@@ -52,7 +64,9 @@ struct ResilientClientTests {
     @Test("a transient transport failure is retried and then succeeds")
     func retriesTransientFailures() async throws {
         let transport = StubTransport.failing(times: 2, with: .timedOut)
-        let (client, sleeper, _) = makeClient(transport: transport)
+        let harness = makeClient(transport: transport)
+        let client = harness.client
+        let sleeper = harness.sleeper
 
         let response = try await client.send(request())
 
@@ -67,7 +81,7 @@ struct ResilientClientTests {
     @Test("every retry carries the original idempotency key")
     func retriesReuseTheIdempotencyKey() async throws {
         let transport = StubTransport.failing(times: 2)
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         _ = try await client.send(request())
 
@@ -80,7 +94,7 @@ struct ResilientClientTests {
     @Test("a non-idempotent request is not retried")
     func doesNotRetryUnsafeRequests() async {
         let transport = StubTransport.failing(times: 1)
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         await #expect(throws: DomainError.self) {
             _ = try await client.send(self.request(method: .post, idempotencyKey: nil))
@@ -91,7 +105,7 @@ struct ResilientClientTests {
     @Test("a TLS failure is not retried")
     func tlsFailureIsTerminal() async {
         let transport = StubTransport(outcomes: [.fail(.tlsFailure)])
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         // Either a genuine interception attempt or a misconfiguration on our side.
         // Retrying achieves nothing and buries the signal.
@@ -104,7 +118,9 @@ struct ResilientClientTests {
     @Test("throttling honours the server's Retry-After")
     func honoursRetryAfter() async throws {
         let transport = StubTransport.throttled(retryAfterSeconds: 12)
-        let (client, sleeper, _) = makeClient(transport: transport)
+        let harness = makeClient(transport: transport)
+        let client = harness.client
+        let sleeper = harness.sleeper
 
         _ = try await client.send(request())
 
@@ -121,7 +137,7 @@ struct ResilientClientTests {
         "details":{"missing_fields":["roof_type"]}}}
         """.utf8)
         let transport = StubTransport(outcomes: [.respond(HTTPResponse(statusCode: 422, body: body))])
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         do {
             _ = try await client.send(request())
@@ -141,7 +157,7 @@ struct ResilientClientTests {
     @Test("a conflict is returned to the caller rather than thrown")
     func conflictIsNotAnError() async throws {
         let transport = StubTransport(outcomes: [.respond(HTTPResponse(statusCode: 409))])
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         let response = try await client.send(request())
 
@@ -153,7 +169,7 @@ struct ResilientClientTests {
     @Test("a 401 is returned so the token manager can refresh once")
     func unauthenticatedIsReturned() async throws {
         let transport = StubTransport(outcomes: [.respond(HTTPResponse(statusCode: 401))])
-        let (client, _, _) = makeClient(transport: transport)
+        let client = makeClient(transport: transport).client
 
         let response = try await client.send(request())
 
@@ -167,7 +183,7 @@ struct ResilientClientTests {
             fallback: .fail(.cannotConnect)
         )
         let policy = RetryPolicy(baseDelay: 0.001, maximumDelay: 0.01, maximumAttempts: 20)
-        let (client, _, _) = makeClient(transport: transport, policy: policy)
+        let client = makeClient(transport: transport, policy: policy).client
 
         _ = try? await client.send(request())
         let callsAfterFirst = transport.callCount
@@ -181,7 +197,7 @@ struct ResilientClientTests {
 
     @Test("a captive portal is treated as absence of network, not a corrupt API")
     func captivePortalIsNotParsed() async {
-        let (client, _, _) = makeClient(transport: StubTransport.captivePortal())
+        let client = makeClient(transport: StubTransport.captivePortal()).client
 
         // A 200 with an HTML body is the signature of a hotel or job-site login page.
         // The naive client parses it into a domain model and reports a broken server.

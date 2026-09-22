@@ -59,14 +59,14 @@ public struct HybridLogicalClock: Sendable, Hashable, Codable, CustomStringConve
         let daysSinceEpoch = Int64(totalSeconds / 86_400)
         let secondOfDay = Int(totalSeconds % 86_400)
 
-        let (year, month, day) = Self.civilDate(fromDaysSinceEpoch: daysSinceEpoch)
+        let date = Self.civilDate(fromDaysSinceEpoch: daysSinceEpoch)
         let hour = secondOfDay / 3600
         let minute = (secondOfDay % 3600) / 60
         let second = secondOfDay % 60
 
-        let date = "\(Self.pad(year, 4))-\(Self.pad(month, 2))-\(Self.pad(day, 2))"
+        let calendarDate = "\(Self.pad(date.year, 4))-\(Self.pad(date.month, 2))-\(Self.pad(date.day, 2))"
         let time = "\(Self.pad(hour, 2)):\(Self.pad(minute, 2)):\(Self.pad(second, 2)).\(Self.pad(millisecond, 3))"
-        return "\(date)T\(time)Z-\(Self.pad(Int(counter), 4))-\(nodeID)"
+        return "\(calendarDate)T\(time)Z-\(Self.pad(Int(counter), 4))-\(nodeID)"
     }
 
     /// Converts days since the Unix epoch into a proleptic Gregorian calendar date.
@@ -74,7 +74,7 @@ public struct HybridLogicalClock: Sendable, Hashable, Codable, CustomStringConve
     /// Howard Hinnant's `civil_from_days`, which is exact for every representable day and
     /// uses only integer division. Verified against a reference implementation across the
     /// epoch, leap years, and century boundaries.
-    static func civilDate(fromDaysSinceEpoch days: Int64) -> (year: Int, month: Int, day: Int) {
+    static func civilDate(fromDaysSinceEpoch days: Int64) -> CivilDate {
         // Shift the epoch to 0000-03-01 so leap days fall at the end of the cycle.
         let shifted = days + 719_468
         let era = (shifted >= 0 ? shifted : shifted - 146_096) / 146_097
@@ -85,7 +85,7 @@ public struct HybridLogicalClock: Sendable, Hashable, Codable, CustomStringConve
         let monthPrime = (5 * dayOfYear + 2) / 153
         let day = dayOfYear - (153 * monthPrime + 2) / 5 + 1
         let month = monthPrime < 10 ? monthPrime + 3 : monthPrime - 9
-        return (Int(year + (month <= 2 ? 1 : 0)), Int(month), Int(day))
+        return CivilDate(year: Int(year + (month <= 2 ? 1 : 0)), month: Int(month), day: Int(day))
     }
 
     private static func pad(_ value: Int, _ width: Int) -> String {
@@ -126,4 +126,15 @@ public enum HybridLogicalClockError: Error, Equatable, Sendable {
     /// value, and no later correction can pull it back. Rejecting is the safer failure,
     /// and it is loud rather than silent.
     case excessiveDrift(remoteMilliseconds: UInt64, localMilliseconds: UInt64, limitMilliseconds: UInt64)
+}
+
+/// A proleptic Gregorian calendar date.
+///
+/// A named type rather than a three-member tuple. `date.month` says what it is; `.1` does
+/// not, and a positional swap between month and day produces a value that is wrong in a way
+/// nothing catches until someone reads a report.
+struct CivilDate: Equatable {
+    let year: Int
+    let month: Int
+    let day: Int
 }

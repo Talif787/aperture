@@ -1,14 +1,3 @@
-// swiftlint:disable no_print
-//
-// This file is a command-line tool, and writing to standard output is its whole purpose.
-// The no_print rule exists because print bypasses the redaction that the Telemetry
-// protocol applies, which matters in the application where a stray print can put customer
-// content in a log. Here there is no log and no customer content: the input is a JSON
-// literal the operator typed, and the output goes to their terminal.
-//
-// Disabled at file scope with a reason rather than removed from the rule, so the rule keeps
-// protecting every other file and this exemption is visible to anyone reading it.
-
 import Foundation
 import ApertureDomain
 import ApertureSync
@@ -221,4 +210,3 @@ func reportConvergence(_ world: ConvergenceWorld, seed: UInt64, steps: Int) asyn
         print("  Reproduce with: make scenario ARGS=\"converge \(seed) \(steps)\"")
     }
 }
-

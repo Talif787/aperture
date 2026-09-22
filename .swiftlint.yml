@@ -12,6 +12,16 @@ included:
 excluded:
   - ios/Packages/ApertureCore/Sources/ApertureContracts/Generated
   - "**/.build"
+  # ApertureScenarios is a command-line development tool, not part of the application.
+  # Writing to standard output is its entire purpose, so the no_print rule fights it on
+  # every line, and SwiftLint itself says a file-wide exemption belongs in configuration
+  # rather than in a blanket disable comment.
+  #
+  # The trade is real and worth naming: the custom security rules do not run here either.
+  # That is acceptable because the tool handles no credentials and no customer content
+  # (its input is a JSON literal the operator typed), and scripts/check_swift_lengths.py
+  # still covers it for length and width.
+  - ios/Packages/ApertureCore/Sources/ApertureScenarios
 
 opt_in_rules:
   - array_init
@@ -59,6 +69,13 @@ function_body_length:
 
 cyclomatic_complexity:
   warning: 8
+  # An exhaustive switch over a closed enum counts one branch per case, which makes a
+  # dispatch table look like tangled control flow. It is the opposite: the compiler is
+  # proving every case is handled, and splitting one into three functions to satisfy an
+  # arithmetic threshold makes it harder to read, not easier.
+  #
+  # Genuine complexity, nested conditionals and compound boolean tests, still counts.
+  ignores_case_statements: true
   error: 12
 
 identifier_name:

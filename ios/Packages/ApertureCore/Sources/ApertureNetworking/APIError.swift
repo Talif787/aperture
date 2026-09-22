@@ -15,7 +15,6 @@ public struct APIError: Error, Equatable, Sendable, Decodable {
     public let correlationID: String?
     public let details: APIErrorDetails?
 
-
     public init(
         code: String,
         httpStatus: Int,
@@ -131,7 +130,6 @@ public enum ErrorMapper {
 /// A top-level type rather than nested inside `APIError`. Nesting it put its `CodingKeys`
 /// two levels deep, and a type reached through three names is harder to refer to in a test
 /// or a switch than one reached through one.
-
 public struct APIErrorDetails: Equatable, Sendable, Decodable {
     public let entityType: String?
     public let entityID: String?
