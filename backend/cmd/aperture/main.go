@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/talif/aperture/backend/internal/httpapi"
 	"github.com/talif/aperture/backend/internal/httpx"
 	"github.com/talif/aperture/backend/internal/obs"
+	"github.com/talif/aperture/backend/internal/store"
 	"github.com/talif/aperture/backend/internal/syncapi"
 )
 
@@ -66,6 +68,10 @@ type config struct {
 	// Clients older than this are refused with a specific version rather than a generic
 	// error, so the app can tell the user what to do.
 	minimumClientVersion string
+
+	// Empty selects the in-memory store, which is correct for local development and for
+	// anything that should not outlive the process.
+	databaseURL string
 }
 
 func loadConfig() config {
@@ -78,6 +84,7 @@ func loadConfig() config {
 		audience:             envOrDefault("APERTURE_TOKEN_AUDIENCE", "aperture-api"),
 		keySetTTL:            time.Hour,
 		minimumClientVersion: envOrDefault("APERTURE_MINIMUM_CLIENT_VERSION", "0.1.0"),
+		databaseURL:          envOrDefault("APERTURE_DATABASE_URL", ""),
 	}
 }
 
@@ -89,6 +96,12 @@ func envOrDefault(key, fallback string) string {
 }
 
 func run(cfg config, logger *slog.Logger) error {
+	// Startup-scoped, cancelled when run returns. A database handshake must not outlive
+	// the attempt to start: a service stuck dialling forever looks identical to one that
+	// is merely slow, and the orchestrator cannot tell them apart either.
+	ctx, cancelStartup := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelStartup()
+
 	// Readiness is tracked separately from liveness. Conflating them is a common mistake
 	// with a specific bad outcome: a degraded dependency causes the orchestrator to kill
 	// and restart a process that is working fine, turning a partial outage into a crash
@@ -116,14 +129,32 @@ func run(cfg config, logger *slog.Logger) error {
 			},
 		}
 
-		// In-memory for now. The store is behind an interface precisely so the protocol
-		// logic could be finished and tested before the persistence layer existed; the
-		// PostgreSQL implementation replaces this one line and nothing else.
-		//
-		// State is lost on restart, which is correct for local development and is why the
-		// runbook mints a token and pushes in the same session.
+		// The store is chosen by configuration, which is what the interface bought: the
+		// protocol logic was finished and tested before persistence existed, and neither
+		// implementation knows about the other.
+		var syncStore syncapi.Store
+
+		if cfg.databaseURL == "" {
+			// State is lost on restart, which is correct for local development and is why
+			// the runbook mints a token and pushes in the same session.
+			logger.Warn("using the in-memory store: set APERTURE_DATABASE_URL to persist")
+			syncStore = syncapi.NewInMemoryStore(time.Now)
+		} else {
+			postgres, storeErr := store.NewPostgres(ctx, cfg.databaseURL, time.Now)
+			if storeErr != nil {
+				// Refused at startup rather than on the first request. A service that
+				// starts healthy and fails on its first real request reports the outage
+				// minutes later than it could, as an application error rather than as
+				// what it is.
+				return fmt.Errorf("connecting to the database: %w", storeErr)
+			}
+			defer postgres.Close()
+			syncStore = postgres
+			logger.Info("using the PostgreSQL store")
+		}
+
 		handlers := httpapi.Handlers{
-			Sync: syncapi.NewService(syncapi.NewInMemoryStore(time.Now), time.Now),
+			Sync: syncapi.NewService(syncStore, time.Now),
 		}
 		handlers.Register(mux, authenticator, cfg.minimumClientVersion)
 
@@ -216,10 +247,10 @@ func run(cfg config, logger *slog.Logger) error {
 		// completed, which on this system means a sync batch that the client must retry.
 		ready.Store(false)
 
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 
-		if err := server.Shutdown(ctx); err != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			if closeErr := server.Close(); closeErr != nil {
 				return errors.Join(err, closeErr)
 			}

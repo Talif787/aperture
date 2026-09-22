@@ -8,6 +8,18 @@ WORKDIR /src
 
 # Dependency layer first so it caches independently of source changes.
 COPY go.mod go.sum* ./
+
+# Accepted as build arguments so a network that cannot reach the module proxy can still
+# build this image. The default is the normal path; the compose file passes the host's
+# values through.
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOSUMDB=sum.golang.org
+ENV GOPROXY=${GOPROXY} GOSUMDB=${GOSUMDB}
+
+# GOTOOLCHAIN=local so a dependency cannot silently pull a different compiler into the
+# image than the base image declares.
+ENV GOTOOLCHAIN=local
+
 RUN go mod download
 
 COPY . .

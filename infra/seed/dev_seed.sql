@@ -106,4 +106,34 @@ WHERE NOT EXISTS (
     WHERE entity_id = 'd2222222-2222-4222-a222-222222222222' AND action = 'registered'
 );
 
+-- Sync fixtures, one entity and one change per tenant.
+--
+-- Present so the isolation checks assert on real rows rather than on two empty tables.
+-- "Both tenants see zero" passes whether the policy works or the table is empty, and only
+-- one of those is worth knowing.
+INSERT INTO sync_entities (tenant_id, entity_type, entity_id, version, hlc,
+                           fields, field_versions)
+VALUES
+    ('11111111-1111-4111-a111-111111111111', 'finding', 'seed-finding-a', 1,
+     '2026-09-10T00:26:40.123Z-0000-devA',
+     '{"note":"Hail bruising on the south slope."}'::jsonb, '{"note":1}'::jsonb),
+    ('22222222-2222-4222-a222-222222222222', 'finding', 'seed-finding-b', 1,
+     '2026-09-10T00:26:40.456Z-0000-devB',
+     '{"note":"Cross-arm corrosion at pole 14."}'::jsonb, '{"note":1}'::jsonb)
+ON CONFLICT (tenant_id, entity_type, entity_id) DO NOTHING;
+
+INSERT INTO sync_changes (tenant_id, entity_type, entity_id, server_version, hlc, changed_fields)
+SELECT '11111111-1111-4111-a111-111111111111', 'finding', 'seed-finding-a', 1,
+       '2026-09-10T00:26:40.123Z-0000-devA', ARRAY['note']
+WHERE NOT EXISTS (
+    SELECT 1 FROM sync_changes WHERE entity_id = 'seed-finding-a'
+);
+
+INSERT INTO sync_changes (tenant_id, entity_type, entity_id, server_version, hlc, changed_fields)
+SELECT '22222222-2222-4222-a222-222222222222', 'finding', 'seed-finding-b', 1,
+       '2026-09-10T00:26:40.456Z-0000-devB', ARRAY['note']
+WHERE NOT EXISTS (
+    SELECT 1 FROM sync_changes WHERE entity_id = 'seed-finding-b'
+);
+
 COMMIT;

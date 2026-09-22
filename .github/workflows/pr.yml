@@ -71,13 +71,48 @@ jobs:
   backend:
     name: Go service
     runs-on: ubuntu-24.04
+
+    # A real database, because the row-level security policies live in PostgreSQL and only
+    # PostgreSQL can demonstrate they hold. Without this the store tests skip, and a suite
+    # that silently skips its most important assertions is indistinguishable from one that
+    # passes them.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aperture
+          POSTGRES_PASSWORD: local-development-only
+          POSTGRES_DB: aperture
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aperture -d aperture"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
+          # Newer than the module declares, which is fine and deliberate: a module
+          # declaring 1.22 builds with any later toolchain, and CI should catch anything
+          # the newer vet and compiler notice. The module's own floor stays low so it
+          # builds on machines that cannot download a toolchain.
           go-version: '1.24'
           cache-dependency-path: backend/go.sum
+
+      # Fails fast with a clear reason rather than a compiler error listing every file
+      # that imports the driver.
+      - name: Verify dependencies are resolved
+        working-directory: backend
+        run: |
+          if [ ! -f go.sum ]; then
+            echo "backend/go.sum is missing. Run 'make backend-deps' and commit the result."
+            exit 1
+          fi
+          go mod verify
 
       - name: Vet
         working-directory: backend
@@ -85,6 +120,9 @@ jobs:
 
       - name: Test with the race detector
         working-directory: backend
+        env:
+          # Present, so the store integration tests run rather than skip.
+          APERTURE_TEST_DATABASE_URL: postgres://aperture:local-development-only@localhost:5432/aperture?sslmode=disable
         run: go test -race -count=1 ./...
 
       - name: Lint

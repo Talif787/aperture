@@ -180,7 +180,7 @@ func (s *InMemoryStore) Changes(
 		return nil, "", false, err
 	}
 
-	after, err := decodeCursor(cursor)
+	after, err := DecodeCursor(cursor)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -200,7 +200,7 @@ func (s *InMemoryStore) Changes(
 			// One more match exists beyond the page. Reported explicitly rather than
 			// inferred from a full page, so an exactly-page-sized final batch is not
 			// mistaken for a full one.
-			return page, encodeCursor(last), true, nil
+			return page, EncodeCursor(last), true, nil
 		}
 
 		page = append(page, record.change)
@@ -210,7 +210,7 @@ func (s *InMemoryStore) Changes(
 	// A cursor beyond anything in the log simply matches nothing, which is the right
 	// answer after a restore from backup: the device recovers on the next change rather
 	// than being stuck on an error it cannot act on.
-	return page, encodeCursor(last), false, nil
+	return page, EncodeCursor(last), false, nil
 }
 
 // ResultForKey implements Store.

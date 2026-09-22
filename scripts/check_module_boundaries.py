@@ -182,12 +182,54 @@ def is_ours(path) -> bool:
     return not any(part in SKIPPED_PARTS or part.startswith(".") for part in path.parts)
 
 
+
+def check_database_driver_isolation() -> list[str]:
+    """The database driver may be imported by exactly one package.
+
+    Tenant scoping is applied when a session is opened. If any other package can open one,
+    the scoping becomes a convention rather than a property, and cross-tenant exposure is
+    the highest-severity failure this system can produce. Enforced mechanically because a
+    boundary that is not enforced mechanically erodes within a quarter.
+    """
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    permitted = {"internal/store"}
+    drivers = ("github.com/jackc/pgx", "database/sql", "github.com/lib/pq")
+    problems: list[str] = []
+
+    for path in sorted(backend.rglob("*.go")):
+        relative = path.relative_to(backend)
+        package = str(relative.parent).replace("\\", "/")
+
+        if package in permitted:
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        for driver in drivers:
+            if f'"{driver}' in text:
+                problems.append(
+                    f"{relative}: imports {driver}, but only {sorted(permitted)} may open "
+                    f"a database session"
+                )
+
+    if not problems:
+        print("Database driver is confined to the store package.")
+    return problems
+
+
 def main() -> int:
     if not PACKAGES_ROOT.is_dir():
         print(f"error: {PACKAGES_ROOT} not found. Run from the repository root.", file=sys.stderr)
         return 1
 
-    violations = check_framework_purity() + check_feature_isolation() + check_acyclic()
+    violations = (
+        check_framework_purity()
+        + check_feature_isolation()
+        + check_acyclic()
+        + check_database_driver_isolation()
+    )
 
     if violations:
         print("Module boundary violations:\n")

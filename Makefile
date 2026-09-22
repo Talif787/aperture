@@ -128,6 +128,11 @@ ios-test: project ## [macOS] Run the iOS test suites on the simulator
 backend-build: ## Build the Go service
 	@cd $(BACKEND_DIR) && go build ./...
 
+.PHONY: backend-test-integration
+backend-test-integration: backend-deps-check ## Run the Go suites including the store tests, against local Postgres
+	@cd backend && APERTURE_TEST_DATABASE_URL="postgres://aperture:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable" \
+		go test -race -count=1 ./...
+
 .PHONY: backend-fmt
 backend-fmt: ## Format the Go sources in place
 	@cd backend && gofmt -w .
@@ -143,8 +148,52 @@ backend-fmt-check: ## Fail when any Go source is not gofmt-clean
 		fi
 	@echo "gofmt: clean"
 
+# The pinned driver version, in one place. Raising it is a deliberate edit here, not a
+# side effect of running `go mod tidy` on a machine that happened to see a newer release.
+PGX_VERSION := v5.7.5
+
+.PHONY: backend-deps
+backend-deps: ## Resolve Go dependencies, required once after Phase 6b
+	@# Every requirement is asserted before resolving, because `go mod tidy` with a missing
+	@# require line selects the newest release, and the newest release routinely needs a
+	@# language version this module does not declare. Go then rewrites the go directive and
+	@# upgrades its own toolchain to compensate, which is a large invisible change and fails
+	@# outright where the checksum database is unreachable.
+	@cd backend && \
+		if ! grep -q 'github.com/jackc/pgx/v5 $(PGX_VERSION)' go.mod; then \
+			echo "pinning pgx to $(PGX_VERSION)"; \
+			go mod edit -require=github.com/jackc/pgx/v5@$(PGX_VERSION); \
+		fi
+	@# GOTOOLCHAIN=local is a correctness guard rather than an environment setting: it turns
+	@# a silent toolchain upgrade into an error naming the dependency that demanded it.
+	@# GOPROXY and GOSUMDB are left to the environment, since CI reaches both and some
+	@# networks reach neither.
+	@cd backend && GOTOOLCHAIN=local go mod tidy
+	@cd backend && grep -E '^go |pgx/v5 v' go.mod | sed 's/^/  /'
+	@echo "dependencies resolved; go.sum written"
+
+.PHONY: backend-deps-check
+backend-deps-check: ## Fail with an instruction when dependencies are missing or stale
+	@if [ ! -f backend/go.sum ]; then \
+		echo "backend/go.sum is missing."; \
+		echo "go.sum holds module checksums, which cannot be written by hand. Run once:"; \
+		echo "  make backend-deps"; \
+		exit 1; \
+	fi
+	@# Also catch a go.mod that is present but stale. Applying a phase archive overwrites
+	@# go.mod with the version that ships the pin, which deliberately lists only the direct
+	@# requirement; the indirect ones are regenerated. Without this the first Go command
+	@# after an overlay fails with "updates to go.mod needed", which names the fix but not
+	@# the reason.
+	@cd backend && if ! GOTOOLCHAIN=local go mod tidy -diff >/dev/null 2>&1; then \
+		echo "backend/go.mod is out of date with the source."; \
+		echo "Usually because a phase archive replaced it. Run:"; \
+		echo "  make backend-deps"; \
+		exit 1; \
+	fi
+
 .PHONY: backend-test
-backend-test: ## Run backend tests with the race detector
+backend-test: backend-deps-check ## Run backend tests with the race detector
 	@cd $(BACKEND_DIR) && go test -race -count=1 ./...
 
 .PHONY: backend-lint
@@ -156,13 +205,29 @@ backend-run: ## Run the service locally on :8080
 	@cd $(BACKEND_DIR) && go run ./cmd/aperture
 
 .PHONY: backend-up
-backend-up: ## Start Postgres and the service in Docker
-	@docker compose -f $(COMPOSE) up -d --build
+backend-up: ## Start Postgres. The service runs natively via make api-up
+	@# No --build. The service image is behind a compose profile and is not started here,
+	@# because building it fetches Go modules inside the container where the host's GOPROXY
+	@# settings do not apply. On a network that blocks the module proxy that build fails and
+	@# takes the database down with it, which is a poor trade for a container that local
+	@# development does not use.
+	@docker compose -f $(COMPOSE) up -d postgres
+	@for i in $$(seq 1 30); do \
+		docker compose -f $(COMPOSE) exec -T postgres pg_isready -U $${POSTGRES_USER:-aperture} -d $${POSTGRES_DB:-aperture} >/dev/null 2>&1 && break; \
+		sleep 1; \
+	done
+	@echo "Postgres ready on localhost:$${POSTGRES_PORT:-5432}. Start the service with: make api-up-postgres"
+
+.PHONY: backend-up-service
+backend-up-service: ## Also build and run the service in a container
+	@# Requires reaching the Go module proxy from inside the build. Where that is blocked:
+	@#   GOPROXY=direct GOSUMDB=off make backend-up-service
+	@docker compose -f $(COMPOSE) --profile service up -d --build
 	@echo "Service on http://localhost:8080  (health: /healthz, readiness: /readyz)"
 
 .PHONY: backend-down
-backend-down: ## Stop the local stack
-	@docker compose -f $(COMPOSE) down
+backend-down: ## Stop the local stack, including the optional service container
+	@docker compose -f $(COMPOSE) --profile service down
 
 .PHONY: backend-logs
 backend-logs: ## Tail the local stack logs
@@ -171,6 +236,12 @@ backend-logs: ## Tail the local stack logs
 # ----------------------------------------------------------------------------- API
 
 DEV_DIR := $(CURDIR)/.dev
+
+# The local Postgres from docker-compose. Empty DATABASE_URL selects the in-memory store,
+# which is the default because most work does not need persistence and an in-memory store
+# starting empty every time makes test state obvious.
+LOCAL_DATABASE_URL := postgres://aperture_app:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable
+DATABASE_URL ?=
 
 .PHONY: api-build
 api-build: ## Build the service and the development token tool
@@ -184,7 +255,7 @@ api-keygen: api-build ## Generate the local signing key and its key set
 	@$(DEV_DIR)/devtoken keygen -key $(DEV_DIR)/dev-key.pem -out $(DEV_DIR)/dev-jwks.json
 
 .PHONY: api-up
-api-up: api-keygen ## Start the service in the background with token verification enabled
+api-up: api-keygen ## Start the service. Add DATABASE_URL=... to use Postgres instead of memory
 	@# Refuse to start when the port is already taken. Waiting for /healthz to answer is not
 	@# enough: a stale process answers it perfectly well, the new binary fails to bind and
 	@# exits, and every subsequent request goes to the old one. That presents as accumulated
@@ -193,12 +264,13 @@ api-up: api-keygen ## Start the service in the background with token verificatio
 	@if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then \
 		echo "Something is already serving on port 8080."; \
 		echo "  make api-down          stops a service started by this Makefile"; \
-		echo "  pkill -f .dev/aperture stops one started by hand"; \
+		echo "  pkill -x aperture      stops one started by hand"; \
 		exit 1; \
 	fi
 	@APERTURE_JWKS_PATH=$(DEV_DIR)/dev-jwks.json \
 		APERTURE_ENVIRONMENT=local \
 		APERTURE_LOG_LEVEL=debug \
+		APERTURE_DATABASE_URL="$(DATABASE_URL)" \
 		nohup $(DEV_DIR)/aperture > $(DEV_DIR)/aperture.log 2>&1 & echo $$! > $(DEV_DIR)/aperture.pid
 	@for i in $$(seq 1 30); do \
 		curl -sf http://localhost:8080/healthz >/dev/null && break; \
@@ -214,6 +286,10 @@ api-up: api-keygen ## Start the service in the background with token verificatio
 	fi
 	@echo "service running, pid $$(cat $(DEV_DIR)/aperture.pid), log $(DEV_DIR)/aperture.log"
 
+.PHONY: api-up-postgres
+api-up-postgres: ## Start the service against the local Postgres, so data survives a restart
+	@$(MAKE) api-up DATABASE_URL="$(LOCAL_DATABASE_URL)"
+
 .PHONY: api-down
 api-down: ## Stop the background service, including one started by hand
 	@if [ -f $(DEV_DIR)/aperture.pid ]; then \
@@ -223,7 +299,12 @@ api-down: ## Stop the background service, including one started by hand
 	@# Also catch a service started outside this Makefile. The pid file only knows about
 	@# processes it launched, and a leftover one holding the port is exactly the case that
 	@# makes a restart look successful while changing nothing.
-	@pkill -f '$(DEV_DIR)/aperture' 2>/dev/null || true
+	@#
+	@# Matched by process name, not by command line. `pkill -f` compares against the full
+	@# command line, and the shell running this recipe has the pattern in its own, so the
+	@# recipe killed its own parent. The symptom is `make: *** Terminated` and a service
+	@# that never stops, which is a confusing pair to debug together.
+	@pkill -x aperture 2>/dev/null || true
 	@sleep 0.3
 	@if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then \
 		echo "Port 8080 is still answering. Something else is serving it:"; \

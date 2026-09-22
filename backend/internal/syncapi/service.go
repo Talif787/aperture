@@ -258,11 +258,20 @@ func versionsFor(fields []string, version int64) map[string]int64 {
 	return versions
 }
 
-func encodeCursor(sequence int64) string {
+// EncodeCursor renders a sequence as the opaque cursor clients echo back.
+//
+// Exported because every Store implementation must produce the same encoding. A cursor
+// whose meaning differs between the in-memory store and the database one would work
+// perfectly in tests and skip a client's changes in production.
+func EncodeCursor(sequence int64) string {
 	return strconv.FormatInt(sequence, 10)
 }
 
-func decodeCursor(cursor string) (int64, error) {
+// DecodeCursor parses a cursor, rejecting anything malformed.
+//
+// A negative value is rejected rather than clamped. Clamping turns a client bug into a
+// full resynchronization that looks like it worked.
+func DecodeCursor(cursor string) (int64, error) {
 	if cursor == "" {
 		return 0, nil
 	}

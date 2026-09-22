@@ -305,6 +305,56 @@ verify-rls)
     pass "the audit log rejects DELETE"
   fi
 
+  # --- sync tables, added in Phase 6b ---------------------------------------------
+  #
+  # Checked separately because they fail differently. Entities expose content, the change
+  # log exposes activity and timing even without content, and the idempotency table exposes
+  # another tenant's stored response to whoever guesses a key.
+
+  if root_sql -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='sync_entities'" \
+      </dev/null | grep -q 1; then
+
+    a_entities=$(app_scoped_value "${TENANT_A}" "SELECT count(*) FROM sync_entities")
+    b_entities=$(app_scoped_value "${TENANT_B}" "SELECT count(*) FROM sync_entities")
+    no_scope_entities=$(app_value "SELECT count(*) FROM sync_entities")
+
+    [[ "${a_entities}" == "1" ]] && pass "tenant A sees its own sync entity" \
+                                 || fail "tenant A saw '${a_entities}' entities, expected 1"
+    [[ "${b_entities}" == "1" ]] && pass "tenant B sees its own sync entity" \
+                                 || fail "tenant B saw '${b_entities}' entities, expected 1"
+    [[ "${no_scope_entities}" == "0" ]] && pass "an unscoped session sees no sync entities" \
+                                        || fail "an unscoped session saw '${no_scope_entities}'"
+
+    a_changes=$(app_scoped_value "${TENANT_A}" "SELECT count(*) FROM sync_changes")
+    [[ "${a_changes}" == "1" ]] && pass "the change log is scoped to the tenant" \
+                                || fail "tenant A saw '${a_changes}' changes, expected 1"
+
+    # Append-only, as a grant rather than a convention: a client's view of history cannot
+    # be rewritten under it by any code path, including a buggy one.
+    if app_scoped_succeeds "${TENANT_A}" "UPDATE sync_changes SET hlc='rewritten'"; then
+      fail "the change log was updatable by the application role"
+    else
+      pass "the change log rejects UPDATE"
+    fi
+
+    if app_scoped_succeeds "${TENANT_A}" "DELETE FROM sync_changes"; then
+      fail "the change log was deletable by the application role"
+    else
+      pass "the change log rejects DELETE"
+    fi
+
+    # Writing a row attributed to another tenant must be refused by WITH CHECK.
+    if app_scoped_succeeds "${TENANT_A}" \
+        "INSERT INTO sync_entities (tenant_id, entity_type, entity_id, version, hlc)
+         VALUES ('${TENANT_B}','finding','forged',1,'h')"; then
+      fail "tenant A wrote a sync entity attributed to tenant B"
+    else
+      pass "a cross-tenant sync write is rejected by the policy"
+    fi
+  else
+    warn "sync tables absent; run make db-migrate to apply 0003"
+  fi
+
   echo
   if [[ ${FAILURES} -eq 0 ]]; then
     printf "${GREEN}Tenant isolation verified.${OFF}\n"

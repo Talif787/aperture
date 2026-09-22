@@ -511,7 +511,7 @@ make db-verify          && echo "6/6 tenant isolation in the database"
 | `devtoken: reading key: no such file` | Key not generated yet | `make api-keygen` |
 | `make api-up` says the port is in use | An earlier service is still running | `make api-down`, which also catches one started by hand |
 | Scenarios report `replayed` where `applied` is expected | A stale process is serving the port, holding state from an earlier run | `make api-down && make api-up`. The in-memory store starts empty, so accumulated state means the process is not the one you just started |
-| The service seems to ignore a code change | Same cause: the old binary is still bound to the port | `pkill -f .dev/aperture`, then `make api-up` |
+| The service seems to ignore a code change | Same cause: the old binary is still bound to the port | `pkill -x aperture`, then `make api-up` |
 | Data disappeared after a restart | The store is in-memory until Phase 6b | Expected. Re-push in the same session |
 | `make api-scenarios` cannot reach the service | Not running, or a different port | `make api-up`, or set `BASE_URL` |
 | Scenario failures after a restart | Earlier scenario state is gone | Re-run: every scenario creates its own entities |

@@ -83,6 +83,88 @@ def is_ours(path) -> bool:
     return not any(part in SKIPPED_PARTS or part.startswith(".") for part in path.parts)
 
 
+
+def check_go_module_floor() -> list[str]:
+    """The module's declared Go version must stay at or below the supported floor.
+
+    `go mod tidy` rewrites this directive when a dependency requires something newer, and
+    it does so quietly. The consequence is not a compile error: it is every machine with an
+    older Go silently downloading a toolchain, which fails outright in an environment that
+    cannot verify one.
+    """
+    go_mod = REPO_ROOT / "backend" / "go.mod"
+    if not go_mod.is_file():
+        return []
+
+    supported = (1, 23)
+
+    for line in go_mod.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("go "):
+            continue
+        parts = line.split()[1].split(".")
+        try:
+            declared = (int(parts[0]), int(parts[1]))
+        except (IndexError, ValueError):
+            return [f"backend/go.mod: cannot parse the go directive {line!r}"]
+
+        if declared > supported:
+            return [
+                f"backend/go.mod declares go {parts[0]}.{parts[1]}, above the supported "
+                f"floor of {supported[0]}.{supported[1]}. A dependency probably raised it; "
+                f"pin that dependency to a version compatible with the floor instead."
+            ]
+
+        print(f"Go module floor: {parts[0]}.{parts[1]} (supported)")
+        return []
+
+    return ["backend/go.mod has no go directive"]
+
+
+
+def check_go_alignment() -> list[str]:
+    """Approximate gofmt's alignment of var, const, and struct field groups.
+
+    Not a substitute for gofmt, which cannot run where this script runs. It exists because
+    hand-padding a column is the one formatting mistake that keeps reaching CI, and a CI
+    round trip for a column of spaces is a poor use of eight minutes.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+    group = re.compile(r'(?:var|const|type \w+ struct) \(?\n((?:\t+\w+\s+\S.*\n)+)')
+
+    for path in sorted(backend.rglob("*.go")):
+        text = path.read_text(encoding="utf-8")
+
+        for match in group.finditer(text):
+            entries = []
+            for line in match.group(1).splitlines():
+                parts = re.match(r'^(\t+)(\w+)(\s+)(\S.*)$', line)
+                if parts:
+                    entries.append((parts.group(2), len(parts.group(3))))
+
+            if len(entries) < 2:
+                continue
+
+            width = max(len(name) for name, _ in entries)
+            for name, spaces in entries:
+                if len(name) + spaces != width + 1:
+                    line_number = text[:match.start()].count("\n") + 1
+                    problems.append(
+                        f"{path.relative_to(REPO_ROOT)}:{line_number}: '{name}' is padded "
+                        f"to column {len(name) + spaces}, gofmt wants {width + 1}. "
+                        f"Run: make backend-fmt"
+                    )
+
+    if not problems:
+        print("Go alignment: var, const, and struct groups look gofmt-clean")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -113,6 +195,8 @@ def main() -> int:
         print(f"YAML: {len(yaml_paths)} file(s) parsed")
 
     failures.extend(check_golangci_version_alignment())
+    failures.extend(check_go_module_floor())
+    failures.extend(check_go_alignment())
 
     if failures:
         print("\nConfiguration errors:")
