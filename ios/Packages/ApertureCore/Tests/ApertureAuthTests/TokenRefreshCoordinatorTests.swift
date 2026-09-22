@@ -99,7 +99,9 @@ struct TokenRefreshCoordinatorTests {
             for _ in 0..<10 {
                 group.addTask { try await coordinator.validAccessToken() }
             }
-            while let _ = try? await group.next() {}
+            // `!= nil` rather than `let _ =`: binding a value only to discard it says the
+            // value matters when only its presence does.
+            while (try? await group.next()) != nil {}
         }
 
         #expect(refresher.presentedTokens == ["refresh-0"])

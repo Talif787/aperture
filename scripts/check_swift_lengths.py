@@ -40,6 +40,13 @@ TUPLE_RETURN_PATTERN = re.compile(r'->\s*\(([^)]*)\)\s*\{?\s*$')
 BLANKET_DISABLE_PATTERN = re.compile(r'//\s*swiftlint:disable\s+(?!next|this|previous)(\w+)')
 DOC_COMMENT_PATTERN = re.compile(r'^\s*///')
 
+# Binding a value only to discard it. `!= nil` says what is actually being tested, and the
+# binding form reads as though the value is used.
+UNUSED_BINDING_PATTERN = re.compile(r'\b(?:if|while|guard)\s+let\s+_\s*=')
+
+# A closure parameter named but never referenced should be `_`.
+FORCE_TRY_PATTERN = re.compile(r'\btry!\s')
+
 FUNCTION_PATTERN = re.compile(
     r'^\s*(?:@\w+\s+)*(?:public |private |internal |fileprivate |static |final |override |mutating )*'
     r'func\s+(\w+)'
@@ -83,6 +90,10 @@ def closing_index(lines: list[str], start: int) -> int | None:
 
 
 def main() -> int:
+    if not self_test():
+        print("Pattern self-test failed. The checks below would report clean regardless.")
+        return 2
+
     findings: list[str] = []
 
     for root in ROOTS:
@@ -121,6 +132,14 @@ def main() -> int:
                         )
                 else:
                     blank_run = 0
+
+                if UNUSED_BINDING_PATTERN.search(line):
+                    findings.append(
+                        f"{relative}:{number}: binds a value only to discard it; use != nil"
+                    )
+
+                if FORCE_TRY_PATTERN.search(line) and not line.strip().startswith("//"):
+                    findings.append(f"{relative}:{number}: force try")
 
                 disable = BLANKET_DISABLE_PATTERN.search(line)
                 if disable:
@@ -189,6 +208,33 @@ def main() -> int:
 
     print("Swift structure OK: lengths, widths, tuples, doc comments, whitespace.")
     return 0
+
+
+
+
+def self_test() -> bool:
+    """Confirm each pattern still matches what it is meant to match.
+
+    Added after an edit silently turned every regex into one matching a literal backslash.
+    The script kept reporting clean, which is the worst way for a checker to fail: it looks
+    like evidence and is the absence of it. Cheap insurance against the same class.
+    """
+    cases = [
+        (TUPLE_RETURN_PATTERN, "    func f() -> (a: Int, b: Int, c: Int) {"),
+        (BLANKET_DISABLE_PATTERN, "// swiftlint:disable no_print"),
+        (DOC_COMMENT_PATTERN, "/// A doc comment"),
+        (UNUSED_BINDING_PATTERN, "while let _ = iterator.next() {}"),
+        (FORCE_TRY_PATTERN, "let value = try! thing()"),
+        (FUNCTION_PATTERN, "    public func doThing() {"),
+        (TYPE_PATTERN, "public struct Thing {"),
+    ]
+
+    for pattern, sample in cases:
+        if not pattern.search(sample):
+            print(f"self-test failed: {pattern.pattern!r} no longer matches {sample!r}")
+            return False
+
+    return True
 
 
 if __name__ == "__main__":
