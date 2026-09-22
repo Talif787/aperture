@@ -125,7 +125,7 @@ func keygen(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(*jwksPath, document, 0o644); err != nil {
+	if err := os.WriteFile(*jwksPath, document, 0o600); err != nil {
 		return fmt.Errorf("writing key set: %w", err)
 	}
 
@@ -179,6 +179,8 @@ func mint(args []string) error {
 }
 
 func loadKey(path string) (*rsa.PrivateKey, error) {
+	// #nosec G304 -- the path is a command-line flag supplied by the operator running this
+	// tool, not a value derived from any request. There is no untrusted input on this path.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading key: %w (run 'devtoken keygen' first)", err)

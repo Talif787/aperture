@@ -71,7 +71,7 @@ func (h Handlers) pullChanges(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, response)
+	writeJSON(request.Context(), writer, http.StatusOK, response)
 }
 
 func (h Handlers) pushDeltas(writer http.ResponseWriter, request *http.Request) {
@@ -117,7 +117,7 @@ func (h Handlers) pushDeltas(writer http.ResponseWriter, request *http.Request) 
 	// 200 rather than 207. Every operation reports its own status in the body, and a
 	// multi-status code would make clients branch on the transport layer for something the
 	// payload already says precisely.
-	writeJSON(writer, http.StatusOK, response)
+	writeJSON(request.Context(), writer, http.StatusOK, response)
 }
 
 // whoami reflects the verified principal.
@@ -133,7 +133,7 @@ func (h Handlers) whoami(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, map[string]any{
+	writeJSON(request.Context(), writer, http.StatusOK, map[string]any{
 		"tenant_id": principal.TenantID,
 		"user_id":   principal.UserID,
 		"roles":     principal.Roles,

@@ -64,8 +64,8 @@ type Operation struct {
 	// concurrency is detected at all.
 	BaseVersion int64 `json:"base_version"`
 
-	HLC     string          `json:"hlc"`
-	Payload map[string]any  `json:"payload,omitempty"`
+	HLC     string         `json:"hlc"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // PushResponse reports the outcome of each operation, in request order.

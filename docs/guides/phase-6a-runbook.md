@@ -201,6 +201,7 @@ The preview button opens `/`, which has no route and correctly returns a 404 env
 cd ~/aperture
 
 make check           # boundaries, queue schema, configuration
+make backend-fmt-check  # gofmt, which the lint job enforces and the test job does not
 make backend-test    # Go, with the race detector
 make api-scenarios   # every endpoint, against the running service
 ```
@@ -508,12 +509,16 @@ make db-verify          && echo "6/6 tenant isolation in the database"
 | Invalid tokens are refused correctly but valid ones are too | Same cause. Correct rejections are not evidence that verification is working | Compare the `kid` in the token header with the one in `.dev/dev-jwks.json` |
 | 401 with a token that worked a minute ago | Default lifetime is 15 minutes | Mint a fresh one with `make api-token` |
 | `devtoken: reading key: no such file` | Key not generated yet | `make api-keygen` |
-| `make api-up` says the port is in use | An earlier service is still running | `make api-down`, or `lsof -i :8080` |
+| `make api-up` says the port is in use | An earlier service is still running | `make api-down`, which also catches one started by hand |
+| Scenarios report `replayed` where `applied` is expected | A stale process is serving the port, holding state from an earlier run | `make api-down && make api-up`. The in-memory store starts empty, so accumulated state means the process is not the one you just started |
+| The service seems to ignore a code change | Same cause: the old binary is still bound to the port | `pkill -f .dev/aperture`, then `make api-up` |
 | Data disappeared after a restart | The store is in-memory until Phase 6b | Expected. Re-push in the same session |
 | `make api-scenarios` cannot reach the service | Not running, or a different port | `make api-up`, or set `BASE_URL` |
 | Scenario failures after a restart | Earlier scenario state is gone | Re-run: every scenario creates its own entities |
 | 426 on every request | A stale `X-Aperture-Client-Version` header in your shell history | Omit the header, or send a current version |
 | `go: command not found` | PATH not reloaded after a recycle | `source ~/.bashrc` |
+| CI lint fails on formatting though tests pass | `go test` compiles, it does not check gofmt | `make backend-fmt`, or `make ci-local` before pushing |
+| CI lint fails but nothing runs on a push to main | `pull-request.yml` triggers on pull requests and manual dispatch only | `gh workflow run pull-request --ref main`, or open a pull request |
 | Go tests fail to build | Module cache | `cd backend && go clean -modcache && go mod download` |
 | `db-status` shows no tables | Volume gone: recycle, `down -v`, or a prune | `make db-migrate && make db-seed` |
 | Everything worked yesterday, nothing today | VM recycled: images, containers, volumes and processes gone; `$HOME` and `.dev/` kept | Part 2, `make api-up`, and `make db-migrate && make db-seed` if using the database |

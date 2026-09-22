@@ -68,6 +68,10 @@ type CachingKeySource struct {
 func NewFileKeySource(path string, ttl time.Duration) *CachingKeySource {
 	return &CachingKeySource{
 		Load: func() (*JSONWebKeySet, error) {
+			// #nosec G304 -- the path comes from APERTURE_JWKS_PATH, which is deployment
+			// configuration rather than request input. A caller who can set it can already
+			// choose which keys the service trusts, so reading an arbitrary file is not an
+			// escalation.
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("authn: reading key set: %w", err)

@@ -29,15 +29,15 @@ import (
 
 // Errors callers distinguish, because each implies different behavior.
 var (
-	ErrMalformed        = errors.New("authn: token is not a well-formed JWT")
-	ErrUnsupportedAlg   = errors.New("authn: unsupported signing algorithm")
-	ErrUnknownKey       = errors.New("authn: signing key is not in the issuer's key set")
-	ErrBadSignature     = errors.New("authn: signature verification failed")
-	ErrExpired          = errors.New("authn: token has expired")
-	ErrNotYetValid      = errors.New("authn: token is not yet valid")
-	ErrWrongIssuer      = errors.New("authn: token issuer does not match the tenant")
-	ErrWrongAudience    = errors.New("authn: token audience does not include this service")
-	ErrMissingSubject   = errors.New("authn: token has no subject")
+	ErrMalformed         = errors.New("authn: token is not a well-formed JWT")
+	ErrUnsupportedAlg    = errors.New("authn: unsupported signing algorithm")
+	ErrUnknownKey        = errors.New("authn: signing key is not in the issuer's key set")
+	ErrBadSignature      = errors.New("authn: signature verification failed")
+	ErrExpired           = errors.New("authn: token has expired")
+	ErrNotYetValid       = errors.New("authn: token is not yet valid")
+	ErrWrongIssuer       = errors.New("authn: token issuer does not match the tenant")
+	ErrWrongAudience     = errors.New("authn: token audience does not include this service")
+	ErrMissingSubject    = errors.New("authn: token has no subject")
 	ErrMissingTenantHint = errors.New("authn: token carries no tenant claim")
 )
 
@@ -69,6 +69,11 @@ type Claims struct {
 // Providers differ, and rejecting one of them produces an outage on a tenant onboarding.
 type Audience []string
 
+// UnmarshalJSON accepts both shapes RFC 7519 permits for the audience claim.
+//
+// Providers differ on whether a single audience is a string or a one-element array, and
+// rejecting either produces an outage during a tenant onboarding rather than during
+// development.
 func (a *Audience) UnmarshalJSON(data []byte) error {
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {

@@ -63,10 +63,6 @@ type Store interface {
 	StoreResult(ctx context.Context, key string, result Result) error
 }
 
-// InMemoryStore is a working implementation, used by tests and by local development.
-//
-// Not a mock. It enforces the same version and tenancy rules the real store does, so a test
-// against it is a test of behavior rather than of which methods were called.
 // changeRecord pairs a change with the scope and sequence the store needs but the wire
 // format does not carry.
 //
@@ -81,6 +77,10 @@ type changeRecord struct {
 	change   Change
 }
 
+// InMemoryStore is a working implementation, used by tests and by local development.
+//
+// Not a mock. It enforces the same version and tenancy rules the real store does, so a test
+// against it is a test of behavior rather than of which methods were called.
 type InMemoryStore struct {
 	mu sync.RWMutex
 

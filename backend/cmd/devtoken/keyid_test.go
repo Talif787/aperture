@@ -31,8 +31,15 @@ func TestKeyIDIsStableForOneKey(t *testing.T) {
 
 	// Equally important in the other direction: minting two tokens from one key must
 	// produce the same identifier, or every token would force a key set reload.
-	if keyID(&key.PublicKey) != keyID(&key.PublicKey) {
-		t.Fatal("key id is not deterministic")
+	//
+	// Bound to variables rather than compared inline. `f(x) != f(x)` is an expression
+	// compared against itself, which the compiler is free to fold and which asserts
+	// nothing about determinism.
+	first := keyID(&key.PublicKey)
+	second := keyID(&key.PublicKey)
+
+	if first != second {
+		t.Fatalf("key id is not deterministic: %q then %q", first, second)
 	}
 }
 

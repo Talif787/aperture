@@ -127,6 +127,21 @@ ios-test: project ## [macOS] Run the iOS test suites on the simulator
 backend-build: ## Build the Go service
 	@cd $(BACKEND_DIR) && go build ./...
 
+.PHONY: backend-fmt
+backend-fmt: ## Format the Go sources in place
+	@cd backend && gofmt -w .
+	@echo "formatted"
+
+.PHONY: backend-fmt-check
+backend-fmt-check: ## Fail when any Go source is not gofmt-clean
+	@cd backend && unformatted=$$(gofmt -l .); \
+		if [ -n "$$unformatted" ]; then \
+			echo "not gofmt-clean:"; echo "$$unformatted" | sed 's/^/  /'; \
+			echo "run: make backend-fmt"; \
+			exit 1; \
+		fi
+	@echo "gofmt: clean"
+
 .PHONY: backend-test
 backend-test: ## Run backend tests with the race detector
 	@cd $(BACKEND_DIR) && go test -race -count=1 ./...
@@ -169,6 +184,17 @@ api-keygen: api-build ## Generate the local signing key and its key set
 
 .PHONY: api-up
 api-up: api-keygen ## Start the service in the background with token verification enabled
+	@# Refuse to start when the port is already taken. Waiting for /healthz to answer is not
+	@# enough: a stale process answers it perfectly well, the new binary fails to bind and
+	@# exits, and every subsequent request goes to the old one. That presents as accumulated
+	@# state and stale behaviour rather than as a startup failure, which is a genuinely
+	@# confusing thing to debug.
+	@if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then \
+		echo "Something is already serving on port 8080."; \
+		echo "  make api-down          stops a service started by this Makefile"; \
+		echo "  pkill -f .dev/aperture stops one started by hand"; \
+		exit 1; \
+	fi
 	@APERTURE_JWKS_PATH=$(DEV_DIR)/dev-jwks.json \
 		APERTURE_ENVIRONMENT=local \
 		APERTURE_LOG_LEVEL=debug \
@@ -177,15 +203,31 @@ api-up: api-keygen ## Start the service in the background with token verificatio
 		curl -sf http://localhost:8080/healthz >/dev/null && break; \
 		sleep 0.2; \
 	done
+	@# Confirm the process we started is the one that is alive, rather than trusting a
+	@# health check that anything on the port could satisfy.
+	@if ! kill -0 $$(cat $(DEV_DIR)/aperture.pid) 2>/dev/null; then \
+		echo "The service exited during startup. Last lines of $(DEV_DIR)/aperture.log:"; \
+		tail -5 $(DEV_DIR)/aperture.log; \
+		rm -f $(DEV_DIR)/aperture.pid; \
+		exit 1; \
+	fi
 	@echo "service running, pid $$(cat $(DEV_DIR)/aperture.pid), log $(DEV_DIR)/aperture.log"
 
 .PHONY: api-down
-api-down: ## Stop the background service
+api-down: ## Stop the background service, including one started by hand
 	@if [ -f $(DEV_DIR)/aperture.pid ]; then \
 		kill $$(cat $(DEV_DIR)/aperture.pid) 2>/dev/null || true; \
 		rm -f $(DEV_DIR)/aperture.pid; \
-		echo "stopped"; \
-	else echo "not running"; fi
+	fi
+	@# Also catch a service started outside this Makefile. The pid file only knows about
+	@# processes it launched, and a leftover one holding the port is exactly the case that
+	@# makes a restart look successful while changing nothing.
+	@pkill -f '$(DEV_DIR)/aperture' 2>/dev/null || true
+	@sleep 0.3
+	@if curl -sf http://localhost:8080/healthz >/dev/null 2>&1; then \
+		echo "Port 8080 is still answering. Something else is serving it:"; \
+		(command -v lsof >/dev/null && lsof -i :8080) || ss -ltnp 2>/dev/null | grep 8080 || true; \
+	else echo "stopped"; fi
 
 .PHONY: api-logs
 api-logs: ## Tail the service log
@@ -266,7 +308,7 @@ bootstrap: ## Set up a fresh clone for development
 	@./scripts/bootstrap.sh
 
 .PHONY: ci-local
-ci-local: check backend-test ## Run what the pull request job runs, locally
+ci-local: check backend-fmt-check backend-test ## Run what the pull request job runs, locally
 	@if command -v swift >/dev/null 2>&1; then \
 		$(MAKE) core-test; \
 	else \

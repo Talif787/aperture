@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -8,7 +9,12 @@ import (
 )
 
 // writeJSON serializes a response body.
-func writeJSON(writer http.ResponseWriter, status int, body any) {
+//
+// Takes a context so the encode-failure log line carries the request's correlation
+// identifier. The previous version passed nil, which is both a staticcheck finding and a
+// practical one: the log line it produced was the only record of a failure that the caller
+// can never be told about, and it arrived with nothing to join it to a request.
+func writeJSON(ctx context.Context, writer http.ResponseWriter, status int, body any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 
@@ -19,7 +25,7 @@ func writeJSON(writer http.ResponseWriter, status int, body any) {
 		// The status line is already sent, so there is nothing to report to the caller.
 		// Logged rather than swallowed, because a serialization failure here means a
 		// response shape changed in a way that nothing else caught.
-		obs.Logger(nil).Error("encoding response", "error", err.Error())
+		obs.Logger(ctx).Error("encoding response", "error", err.Error())
 	}
 }
 
@@ -55,5 +61,9 @@ func writeErrorWithDetails(
 		envelope["details"] = details
 	}
 
-	writeJSON(writer, status, map[string]any{"error": envelope})
+	ctx := context.Background()
+	if request != nil {
+		ctx = request.Context()
+	}
+	writeJSON(ctx, writer, status, map[string]any{"error": envelope})
 }

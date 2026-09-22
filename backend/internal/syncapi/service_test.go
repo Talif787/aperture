@@ -45,7 +45,7 @@ func operation(id, entityID string, base int64, fields ...string) Operation {
 	}
 }
 
-func push(t *testing.T, service *Service, ctx context.Context, ops ...Operation) *PushResponse {
+func push(ctx context.Context, t *testing.T, service *Service, ops ...Operation) *PushResponse {
 	t.Helper()
 	response, err := service.Push(ctx, PushRequest{Operations: ops})
 	if err != nil {
@@ -57,7 +57,7 @@ func push(t *testing.T, service *Service, ctx context.Context, ops ...Operation)
 func TestCreateAppliesAtVersionOne(t *testing.T) {
 	service, _ := newService()
 
-	response := push(t, service, scoped(tenantA), Operation{
+	response := push(scoped(tenantA), t, service, Operation{
 		OperationID: "op-1", EntityType: "finding", EntityID: "f-1", Kind: KindCreate,
 		DirtyFields: []string{"note"}, BaseVersion: 0, HLC: "hlc-1",
 		Payload: map[string]any{"note": "first"},
@@ -74,8 +74,8 @@ func TestRetryReplaysRatherThanReapplying(t *testing.T) {
 	ctx := scoped(tenantA)
 	op := operation("op-1", "f-1", 0, "note")
 
-	first := push(t, service, ctx, op).Results[0]
-	second := push(t, service, ctx, op).Results[0]
+	first := push(ctx, t, service, op).Results[0]
+	second := push(ctx, t, service, op).Results[0]
 
 	// Exactly-once effect over an at-least-once channel. Without this, a retry after an
 	// unknown outcome (the common case on a marginal link) applies the change twice.
@@ -100,12 +100,12 @@ func TestConcurrentEditsToDifferentFieldsBothApply(t *testing.T) {
 	service, _ := newService()
 	ctx := scoped(tenantA)
 
-	push(t, service, ctx, operation("op-1", "f-1", 0, "note"))
+	push(ctx, t, service, operation("op-1", "f-1", 0, "note"))
 
 	// A second device still believes the entity is at version 1, but it changed a field
 	// nobody else touched. This is concurrency, not disagreement, and prompting a person
 	// for it would happen several times a shift for no reason.
-	result := push(t, service, ctx, operation("op-2", "f-1", 0, "severity")).Results[0]
+	result := push(ctx, t, service, operation("op-2", "f-1", 0, "severity")).Results[0]
 
 	if result.Status != StatusApplied {
 		t.Fatalf("expected applied, got %+v", result)
@@ -116,8 +116,8 @@ func TestOverlappingFieldConflicts(t *testing.T) {
 	service, _ := newService()
 	ctx := scoped(tenantA)
 
-	push(t, service, ctx, operation("op-1", "f-1", 0, "measurement_value"))
-	result := push(t, service, ctx, operation("op-2", "f-1", 0, "measurement_value")).Results[0]
+	push(ctx, t, service, operation("op-1", "f-1", 0, "measurement_value"))
+	result := push(ctx, t, service, operation("op-2", "f-1", 0, "measurement_value")).Results[0]
 
 	if result.Status != StatusConflict {
 		t.Fatalf("expected conflict, got %+v", result)
@@ -134,12 +134,12 @@ func TestConflictIsStableAcrossRetries(t *testing.T) {
 	service, _ := newService()
 	ctx := scoped(tenantA)
 
-	push(t, service, ctx, operation("op-1", "f-1", 0, "measurement_value"))
+	push(ctx, t, service, operation("op-1", "f-1", 0, "measurement_value"))
 	op := operation("op-2", "f-1", 0, "measurement_value")
 
-	first := push(t, service, ctx, op).Results[0]
-	push(t, service, ctx, operation("op-3", "f-1", 1, "note"))
-	second := push(t, service, ctx, op).Results[0]
+	first := push(ctx, t, service, op).Results[0]
+	push(ctx, t, service, operation("op-3", "f-1", 1, "note"))
+	second := push(ctx, t, service, op).Results[0]
 
 	// The server has moved on between the two calls. A client retrying after a conflict
 	// must receive the same conflict rather than a fresh evaluation, or the two sides can
@@ -152,7 +152,7 @@ func TestConflictIsStableAcrossRetries(t *testing.T) {
 func TestOneRejectionDoesNotFailTheBatch(t *testing.T) {
 	service, _ := newService()
 
-	response := push(t, service, scoped(tenantA),
+	response := push(scoped(tenantA), t, service,
 		operation("op-1", "f-1", 0, "note"),
 		Operation{OperationID: "op-2", EntityType: "finding", EntityID: "f-2", Kind: "nonsense",
 			DirtyFields: []string{"note"}, HLC: "hlc"},
@@ -174,7 +174,7 @@ func TestOneRejectionDoesNotFailTheBatch(t *testing.T) {
 func TestOperationsMissingDirtyFieldsAreRejected(t *testing.T) {
 	service, _ := newService()
 
-	result := push(t, service, scoped(tenantA), Operation{
+	result := push(scoped(tenantA), t, service, Operation{
 		OperationID: "op-1", EntityType: "finding", EntityID: "f-1",
 		Kind: KindUpdate, BaseVersion: 0, HLC: "hlc",
 	}).Results[0]
@@ -189,7 +189,7 @@ func TestOperationsMissingDirtyFieldsAreRejected(t *testing.T) {
 func TestEditingAnEntityTheServerHasNeverSeenConflicts(t *testing.T) {
 	service, _ := newService()
 
-	result := push(t, service, scoped(tenantA), operation("op-1", "f-unknown", 7, "note")).Results[0]
+	result := push(scoped(tenantA), t, service, operation("op-1", "f-unknown", 7, "note")).Results[0]
 
 	// Usually a restore onto a different backend. Applying it would silently resurrect a
 	// record that was deliberately removed.
@@ -201,11 +201,11 @@ func TestEditingAnEntityTheServerHasNeverSeenConflicts(t *testing.T) {
 func TestTenantsCannotSeeEachOther(t *testing.T) {
 	service, _ := newService()
 
-	push(t, service, scoped(tenantA), operation("op-1", "f-1", 0, "note"))
+	push(scoped(tenantA), t, service, operation("op-1", "f-1", 0, "note"))
 
 	// The same entity identifier, a different tenant. It must look absent, not conflict,
 	// because a conflict would confirm that something exists under that identifier.
-	result := push(t, service, scoped(tenantB), operation("op-2", "f-1", 0, "note")).Results[0]
+	result := push(scoped(tenantB), t, service, operation("op-2", "f-1", 0, "note")).Results[0]
 	if result.Status != StatusApplied {
 		t.Fatalf("tenant B should have created its own record, got %+v", result)
 	}
@@ -235,9 +235,9 @@ func TestTheChangeLogIsScopedToTheTenant(t *testing.T) {
 	service, _ := newService()
 
 	for i := 0; i < 5; i++ {
-		push(t, service, scoped(tenantA), operation("a-"+string(rune('a'+i)), "f-a"+string(rune('a'+i)), 0, "note"))
+		push(scoped(tenantA), t, service, operation("a-"+string(rune('a'+i)), "f-a"+string(rune('a'+i)), 0, "note"))
 	}
-	push(t, service, scoped(tenantB), operation("b-1", "f-b1", 0, "note"))
+	push(scoped(tenantB), t, service, operation("b-1", "f-b1", 0, "note"))
 
 	fromB, err := service.Pull(scoped(tenantB), PullRequest{})
 	if err != nil {
@@ -257,9 +257,9 @@ func TestTheChangeLogIsScopedToTheTenant(t *testing.T) {
 func TestCursorsAreIndependentAcrossTenants(t *testing.T) {
 	service, _ := newService()
 
-	push(t, service, scoped(tenantA), operation("a-1", "f-a1", 0, "note"))
-	push(t, service, scoped(tenantA), operation("a-2", "f-a2", 0, "note"))
-	push(t, service, scoped(tenantB), operation("b-1", "f-b1", 0, "note"))
+	push(scoped(tenantA), t, service, operation("a-1", "f-a1", 0, "note"))
+	push(scoped(tenantA), t, service, operation("a-2", "f-a2", 0, "note"))
+	push(scoped(tenantB), t, service, operation("b-1", "f-b1", 0, "note"))
 
 	// Tenant B starts from the beginning and must see its own change, not skip past it
 	// because tenant A happened to write two rows first. A cursor that counts rows rather
@@ -277,8 +277,8 @@ func TestIdempotencyKeysAreScopedToTheTenant(t *testing.T) {
 	service, _ := newService()
 	op := operation("shared-key", "f-1", 0, "note")
 
-	push(t, service, scoped(tenantA), op)
-	result := push(t, service, scoped(tenantB), op).Results[0]
+	push(scoped(tenantA), t, service, op)
+	result := push(scoped(tenantB), t, service, op).Results[0]
 
 	// A globally keyed idempotency table would return tenant A's stored response to
 	// tenant B, which is both a correctness failure and a cross-tenant disclosure.
@@ -306,7 +306,7 @@ func TestPullPagesAndAdvancesTheCursor(t *testing.T) {
 	ctx := scoped(tenantA)
 
 	for i := 0; i < 5; i++ {
-		push(t, service, ctx, operation("op-"+string(rune('a'+i)), "f-"+string(rune('a'+i)), 0, "note"))
+		push(ctx, t, service, operation("op-"+string(rune('a'+i)), "f-"+string(rune('a'+i)), 0, "note"))
 	}
 
 	first, err := service.Pull(ctx, PullRequest{Limit: 2})
