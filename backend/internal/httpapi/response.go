@@ -37,6 +37,12 @@ func writeError(writer http.ResponseWriter, request *http.Request, status int, c
 	writeErrorWithDetails(writer, request, status, code, message, nil)
 }
 
+// writeErrorWithDetails emits the envelope with structured detail.
+//
+// The request is required rather than optional. An optional one meant falling back to a
+// fresh root context, which detaches the log line from the request that produced it and
+// discards the correlation identifier that makes it traceable. Every caller is a handler
+// or middleware, so there is always a request to inherit from.
 func writeErrorWithDetails(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -54,16 +60,11 @@ func writeErrorWithDetails(
 		"retryable": status == http.StatusTooManyRequests || status >= http.StatusInternalServerError,
 	}
 
-	if request != nil {
-		envelope["correlation_id"] = obs.CorrelationID(request.Context())
-	}
+	envelope["correlation_id"] = obs.CorrelationID(request.Context())
+
 	if details != nil {
 		envelope["details"] = details
 	}
 
-	ctx := context.Background()
-	if request != nil {
-		ctx = request.Context()
-	}
-	writeJSON(ctx, writer, status, map[string]any{"error": envelope})
+	writeJSON(request.Context(), writer, status, map[string]any{"error": envelope})
 }

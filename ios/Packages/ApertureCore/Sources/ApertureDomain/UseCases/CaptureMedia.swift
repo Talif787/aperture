@@ -68,13 +68,7 @@ public struct CaptureMedia: Sendable {
         // 1. Refuse before acquiring, never after. A capture that fires and then fails to
         //    persist is the one outcome that must not happen, because the inspector saw the
         //    shutter and will believe the evidence exists.
-        let available = try await mediaWriter.availableBytes()
-        guard StoragePolicy.disposition(availableBytes: available) != .blocked else {
-            telemetry.error("ERR-4301", correlationID: nil)
-            throw DomainError.storageFull(
-                bytesNeeded: StoragePolicy.blockingThreshold - available
-            )
-        }
+        try await refuseIfStorageExhausted()
 
         // 2. Durable write. Returns only once the bytes survive a power loss.
         let written = try await mediaWriter.write(request.data, kind: request.kind)
@@ -90,6 +84,37 @@ public struct CaptureMedia: Sendable {
         )
 
         // 3. Record and enqueue atomically. Either both land or neither does.
+        try await recordOrReclaim(asset, request: request, written: written)
+
+        telemetry.event("capture.completed", attributes: [
+            "bytes": .count(Int(written.byteCount)),
+            "kind": .category(TelemetryCategory("media"))
+        ])
+
+        // 4. Only now may the caller tell the user it worked.
+        return asset
+    }
+
+    private func refuseIfStorageExhausted() async throws {
+        let available = try await mediaWriter.availableBytes()
+        guard StoragePolicy.disposition(availableBytes: available) == .blocked else { return }
+
+        telemetry.error("ERR-4301", correlationID: nil)
+        throw DomainError.storageFull(
+            bytesNeeded: StoragePolicy.blockingThreshold - available
+        )
+    }
+
+    /// Commits the record and the sync operation together, reclaiming the bytes on failure.
+    ///
+    /// The transaction covering both matters as much as the durable write itself. A crash
+    /// between them leaves an asset the user can see and the server will never hear about,
+    /// which is the same loss wearing a different hat.
+    private func recordOrReclaim(
+        _ asset: MediaAsset,
+        request: Request,
+        written: WrittenMedia
+    ) async throws {
         do {
             try await transactions.inTransaction {
                 var stored = asset
@@ -97,18 +122,7 @@ public struct CaptureMedia: Sendable {
                     stored.attach(to: findingID, clock: clock.send())
                 }
                 try await media.save(stored)
-                try await operations.enqueue(
-                    PendingOperation(
-                        id: OperationID(generatedAt: dateProvider.now, random: random),
-                        entityType: "media_asset",
-                        entityID: stored.id.description,
-                        kind: "attach_media",
-                        dirtyFields: ["content_hash", "upload_state"],
-                        baseVersion: 0,
-                        hlc: stored.sync.hlc,
-                        createdAt: dateProvider.now
-                    )
-                )
+                try await operations.enqueue(pendingOperation(for: stored))
             }
         } catch {
             // The bytes are on disk with nothing pointing at them. Reclaiming immediately
@@ -119,13 +133,18 @@ public struct CaptureMedia: Sendable {
             telemetry.error("ERR-4801", correlationID: nil)
             throw error
         }
+    }
 
-        telemetry.event("capture.completed", attributes: [
-            "bytes": .count(Int(written.byteCount)),
-            "kind": .category(TelemetryCategory("media"))
-        ])
-
-        // 4. Only now may the caller tell the user it worked.
-        return asset
+    private func pendingOperation(for asset: MediaAsset) -> PendingOperation {
+        PendingOperation(
+            id: OperationID(generatedAt: dateProvider.now, random: random),
+            entityType: "media_asset",
+            entityID: asset.id.description,
+            kind: "attach_media",
+            dirtyFields: ["content_hash", "upload_state"],
+            baseVersion: 0,
+            hlc: asset.sync.hlc,
+            createdAt: dateProvider.now
+        )
     }
 }

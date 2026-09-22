@@ -1,3 +1,14 @@
+// swiftlint:disable no_print
+//
+// This file is a command-line tool, and writing to standard output is its whole purpose.
+// The no_print rule exists because print bypasses the redaction that the Telemetry
+// protocol applies, which matters in the application where a stray print can put customer
+// content in a log. Here there is no log and no customer content: the input is a JSON
+// literal the operator typed, and the output goes to their terminal.
+//
+// Disabled at file scope with a reason rather than removed from the rule, so the rule keeps
+// protecting every other file and this exemption is visible to anyone reading it.
+
 import Foundation
 import ApertureDomain
 import ApertureSync
@@ -91,69 +102,37 @@ func runMerge(first: String, second: String) {
     print("  inspector who was on site and a reviewer who was not.")
 }
 
-func runConverge(seed: UInt64, steps: Int) async {
+/// Holds the pieces one generated history needs, so the command itself stays readable.
+struct ConvergenceWorld {
     let queue = InMemorySyncQueue()
     let cursors = InMemoryCursorStore()
     let server = InMemorySyncServer()
     let dateProvider = TestDateProvider()
-    let random = SeededRandomSource(seed: seed)
-    let clock = HybridLogicalClockGenerator(nodeID: "devA", dateProvider: dateProvider)
+    let random: SeededRandomSource
+    let clock: HybridLogicalClockGenerator
 
-    let engine = SyncEngine(
-        queue: queue, cursors: cursors, transport: server,
-        dateProvider: dateProvider, random: random,
-        retryPolicy: RetryPolicy(baseDelay: 0.01, maximumDelay: 0.1, maximumAttempts: 12)
-    )
+    init(seed: UInt64) {
+        random = SeededRandomSource(seed: seed)
+        clock = HybridLogicalClockGenerator(nodeID: "devA", dateProvider: dateProvider)
+    }
 
-    let entities = ["finding-1", "finding-2", "finding-3"]
-    let fields = [Finding.Field.note, Finding.Field.attachedMedia, Finding.Field.measurement]
+    var engine: SyncEngine {
+        SyncEngine(
+            queue: queue, cursors: cursors, transport: server,
+            dateProvider: dateProvider, random: random,
+            retryPolicy: RetryPolicy(baseDelay: 0.01, maximumDelay: 0.1, maximumAttempts: 12)
+        )
+    }
+}
+
+func runConverge(seed: UInt64, steps: Int) async {
+    let world = ConvergenceWorld(seed: seed)
     var trace: [String] = []
 
     print("Generated history, seed \(seed), \(steps) steps\n")
 
     for _ in 0..<steps {
-        let entity = entities[Int(random.value(upperBound: UInt64(entities.count)))]
-        let field = fields[Int(random.value(upperBound: UInt64(fields.count)))]
-
-        switch random.value(upperBound: 100) {
-        case 0..<30:
-            let operation = SyncOperation(
-                id: OperationID(generatedAt: dateProvider.now, random: random),
-                entityType: "finding", entityID: entity, kind: .update,
-                dirtyFields: [field],
-                baseVersion: server.entities[entity]?.version ?? 0,
-                hlc: clock.send(), createdAt: dateProvider.now
-            )
-            try? await queue.enqueue(operation)
-            trace.append("local(\(entity).\(field))")
-
-        case 30..<50:
-            server.applyServerEdit(
-                entityID: entity, fields: [field: "server-value"],
-                hlc: HybridLogicalClock(
-                    wallClockMilliseconds: UInt64(dateProvider.now.timeIntervalSince1970 * 1000),
-                    counter: 0, nodeID: "srv1"
-                )
-            )
-            trace.append("remote(\(entity).\(field))")
-
-        case 50..<75:
-            _ = try? await engine.synchronize()
-            trace.append("sync")
-
-        case 75..<83:
-            server.failNextPush(with: DomainError.unrecoverable(code: "ERR-4602", correlationID: "gen"))
-            _ = try? await engine.synchronize()
-            trace.append("transportFailure")
-
-        case 83..<90:
-            _ = try? await engine.reconcileAfterLaunch()
-            trace.append("terminate")
-
-        default:
-            dateProvider.advance(by: Double(random.value(upperBound: 120)))
-            trace.append("advanceClock")
-        }
+        trace.append(await applyGeneratedStep(in: world))
     }
 
     print("  \(trace.joined(separator: " "))\n")
@@ -162,20 +141,75 @@ func runConverge(seed: UInt64, steps: Int) async {
     // settle loop with a frozen clock reports divergence for an operation that is behaving
     // exactly as designed.
     for _ in 0..<12 {
-        dateProvider.advance(by: 600)
-        _ = try? await engine.reconcileAfterLaunch()
-        _ = try? await engine.synchronize()
+        world.dateProvider.advance(by: 600)
+        _ = try? await world.engine.reconcileAfterLaunch()
+        _ = try? await world.engine.synchronize()
     }
 
-    let outstanding = (try? await queue.depth()) ?? -1
-    let dead = (try? await queue.deadLettered().count) ?? -1
-    let stranded = (try? await queue.orphanedInFlight().count) ?? -1
+    await reportConvergence(world, seed: seed, steps: steps)
+}
+
+/// Applies one randomly chosen step and returns its label for the trace.
+func applyGeneratedStep(in world: ConvergenceWorld) async -> String {
+    let entities = ["finding-1", "finding-2", "finding-3"]
+    let fields = [Finding.Field.note, Finding.Field.attachedMedia, Finding.Field.measurement]
+
+    let entity = entities[Int(world.random.value(upperBound: UInt64(entities.count)))]
+    let field = fields[Int(world.random.value(upperBound: UInt64(fields.count)))]
+
+    switch world.random.value(upperBound: 100) {
+    case 0..<30:
+        let operation = SyncOperation(
+            id: OperationID(generatedAt: world.dateProvider.now, random: world.random),
+            entityType: "finding", entityID: entity, kind: .update,
+            dirtyFields: [field],
+            baseVersion: world.server.entities[entity]?.version ?? 0,
+            hlc: world.clock.send(), createdAt: world.dateProvider.now
+        )
+        try? await world.queue.enqueue(operation)
+        return "local(\(entity).\(field))"
+
+    case 30..<50:
+        world.server.applyServerEdit(
+            entityID: entity, fields: [field: "server-value"],
+            hlc: HybridLogicalClock(
+                wallClockMilliseconds: UInt64(world.dateProvider.now.timeIntervalSince1970 * 1000),
+                counter: 0, nodeID: "srv1"
+            )
+        )
+        return "remote(\(entity).\(field))"
+
+    case 50..<75:
+        _ = try? await world.engine.synchronize()
+        return "sync"
+
+    case 75..<83:
+        world.server.failNextPush(
+            with: DomainError.unrecoverable(code: "ERR-4602", correlationID: "gen")
+        )
+        _ = try? await world.engine.synchronize()
+        return "transportFailure"
+
+    case 83..<90:
+        _ = try? await world.engine.reconcileAfterLaunch()
+        return "terminate"
+
+    default:
+        world.dateProvider.advance(by: Double(world.random.value(upperBound: 120)))
+        return "advanceClock"
+    }
+}
+
+func reportConvergence(_ world: ConvergenceWorld, seed: UInt64, steps: Int) async {
+    let outstanding = (try? await world.queue.depth()) ?? -1
+    let dead = (try? await world.queue.deadLettered().count) ?? -1
+    let stranded = (try? await world.queue.orphanedInFlight().count) ?? -1
 
     print("After the network settles:")
     print("  outstanding, neither applied nor dead: \(outstanding)")
     print("  dead-lettered, visible to the user:    \(dead)")
     print("  stranded in flight:                    \(stranded)")
-    print("  server entities: \(server.entities.count), push calls: \(server.pushCallCount)")
+    print("  server entities: \(world.server.entities.count), push calls: \(world.server.pushCallCount)")
     print("")
 
     if outstanding == 0 && stranded == 0 {

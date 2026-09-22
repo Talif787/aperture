@@ -13,65 +13,15 @@ public struct APIError: Error, Equatable, Sendable, Decodable {
     public let httpStatus: Int
     public let retryable: Bool
     public let correlationID: String?
-    public let details: Details?
+    public let details: APIErrorDetails?
 
-    public struct Details: Equatable, Sendable, Decodable {
-        public let entityType: String?
-        public let entityID: String?
-        public let serverVersion: Int64?
-        public let clientBaseVersion: Int64?
-        public let conflictingFields: [String]?
-        public let missingFields: [String]?
-        public let minimumVersion: String?
-        public let bytesNeeded: Int64?
-
-        /// Written out rather than synthesized, and rather than relying on a decoder-wide
-        /// snake-case strategy.
-        ///
-        /// Two reasons. A global strategy would silently reshape every other type the same
-        /// decoder touches, and it would still get `entityID` wrong, since it produces
-        /// `entityId`. More importantly, every field here is optional, so a key mismatch
-        /// does not throw: it decodes successfully with nils, and the failure surfaces far
-        /// downstream as a missing value nobody can explain. Explicit keys make the wire
-        /// contract reviewable in one place.
-        private enum CodingKeys: String, CodingKey {
-            case entityType = "entity_type"
-            case entityID = "entity_id"
-            case serverVersion = "server_version"
-            case clientBaseVersion = "client_base_version"
-            case conflictingFields = "conflicting_fields"
-            case missingFields = "missing_fields"
-            case minimumVersion = "minimum_version"
-            case bytesNeeded = "bytes_needed"
-        }
-
-        public init(
-            entityType: String? = nil,
-            entityID: String? = nil,
-            serverVersion: Int64? = nil,
-            clientBaseVersion: Int64? = nil,
-            conflictingFields: [String]? = nil,
-            missingFields: [String]? = nil,
-            minimumVersion: String? = nil,
-            bytesNeeded: Int64? = nil
-        ) {
-            self.entityType = entityType
-            self.entityID = entityID
-            self.serverVersion = serverVersion
-            self.clientBaseVersion = clientBaseVersion
-            self.conflictingFields = conflictingFields
-            self.missingFields = missingFields
-            self.minimumVersion = minimumVersion
-            self.bytesNeeded = bytesNeeded
-        }
-    }
 
     public init(
         code: String,
         httpStatus: Int,
         retryable: Bool,
         correlationID: String? = nil,
-        details: Details? = nil
+        details: APIErrorDetails? = nil
     ) {
         self.code = code
         self.httpStatus = httpStatus
@@ -92,7 +42,7 @@ public struct APIError: Error, Equatable, Sendable, Decodable {
         httpStatus = try nested.decode(Int.self, forKey: .httpStatus)
         retryable = try nested.decodeIfPresent(Bool.self, forKey: .retryable) ?? false
         correlationID = try nested.decodeIfPresent(String.self, forKey: .correlationID)
-        details = try nested.decodeIfPresent(Details.self, forKey: .details)
+        details = try nested.decodeIfPresent(APIErrorDetails.self, forKey: .details)
     }
 }
 
@@ -173,5 +123,62 @@ public enum ErrorMapper {
         case .unexpectedResponse:
             return .unrecoverable(code: "ERR-4802", correlationID: correlationID)
         }
+    }
+}
+
+/// The structured detail an error envelope may carry.
+///
+/// A top-level type rather than nested inside `APIError`. Nesting it put its `CodingKeys`
+/// two levels deep, and a type reached through three names is harder to refer to in a test
+/// or a switch than one reached through one.
+
+public struct APIErrorDetails: Equatable, Sendable, Decodable {
+    public let entityType: String?
+    public let entityID: String?
+    public let serverVersion: Int64?
+    public let clientBaseVersion: Int64?
+    public let conflictingFields: [String]?
+    public let missingFields: [String]?
+    public let minimumVersion: String?
+    public let bytesNeeded: Int64?
+
+    /// Written out rather than synthesized, and rather than relying on a decoder-wide
+    /// snake-case strategy.
+    ///
+    /// Two reasons. A global strategy would silently reshape every other type the same
+    /// decoder touches, and it would still get `entityID` wrong, since it produces
+    /// `entityId`. More importantly, every field here is optional, so a key mismatch
+    /// does not throw: it decodes successfully with nils, and the failure surfaces far
+    /// downstream as a missing value nobody can explain. Explicit keys make the wire
+    /// contract reviewable in one place.
+    private enum CodingKeys: String, CodingKey {
+        case entityType = "entity_type"
+        case entityID = "entity_id"
+        case serverVersion = "server_version"
+        case clientBaseVersion = "client_base_version"
+        case conflictingFields = "conflicting_fields"
+        case missingFields = "missing_fields"
+        case minimumVersion = "minimum_version"
+        case bytesNeeded = "bytes_needed"
+    }
+
+    public init(
+        entityType: String? = nil,
+        entityID: String? = nil,
+        serverVersion: Int64? = nil,
+        clientBaseVersion: Int64? = nil,
+        conflictingFields: [String]? = nil,
+        missingFields: [String]? = nil,
+        minimumVersion: String? = nil,
+        bytesNeeded: Int64? = nil
+    ) {
+        self.entityType = entityType
+        self.entityID = entityID
+        self.serverVersion = serverVersion
+        self.clientBaseVersion = clientBaseVersion
+        self.conflictingFields = conflictingFields
+        self.missingFields = missingFields
+        self.minimumVersion = minimumVersion
+        self.bytesNeeded = bytesNeeded
     }
 }

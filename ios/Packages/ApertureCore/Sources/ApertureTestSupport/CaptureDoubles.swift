@@ -117,55 +117,62 @@ public enum TemplateFixtures {
             id: id,
             version: version,
             name: "Residential roof, hail",
-            fields: [
-                TemplateField(
-                    key: "roof_material",
-                    label: "Roof material",
-                    kind: .choice(["asphalt_shingle", "tile", "metal", "other"]),
-                    requirement: .always
-                ),
-                // Only asked when the answer above was "other", which is the conditional
-                // case the engine exists to handle.
-                TemplateField(
-                    key: "roof_material_other",
-                    label: "Describe the material",
-                    kind: .text(multiline: false),
-                    visibility: .equals(field: "roof_material", value: .choice("other")),
-                    requirement: .equals(field: "roof_material", value: .choice("other")),
-                    validation: TemplateField.Validation(maximumLength: 120)
-                ),
-                TemplateField(
-                    key: "slope_degrees",
-                    label: "Slope",
-                    kind: .number(unit: "degrees"),
-                    requirement: .always,
-                    validation: TemplateField.Validation(minimum: 0, maximum: 90)
-                ),
-                // A steep roof brings a safety question that a flat one does not.
-                TemplateField(
-                    key: "fall_protection_used",
-                    label: "Fall protection used",
-                    kind: .boolean,
-                    visibility: .greaterThan(field: "slope_degrees", value: 30),
-                    requirement: .greaterThan(field: "slope_degrees", value: 30)
-                ),
-                TemplateField(
-                    key: "access_notes",
-                    label: "Access notes",
-                    kind: .text(multiline: true),
-                    validation: TemplateField.Validation(maximumLength: 2000)
-                )
-            ],
-            captureRequirements: [
-                CaptureRequirement(key: "elevation_photos", label: "Elevations", kind: .photo, minimumCount: 4),
-                CaptureRequirement(
-                    key: "damage_closeups",
-                    label: "Damage close-ups",
-                    kind: .photo,
-                    minimumCount: 2,
-                    condition: .equals(field: "roof_material", value: .choice("asphalt_shingle"))
-                )
-            ]
+            fields: roofFields,
+            captureRequirements: roofCaptureRequirements
         )
     }
+
+    /// The form fields, separated from the template so each list reads on its own.
+    ///
+    /// The conditional ones are the point of the fixture: `roof_material_other` appears
+    /// only when the material is "other", and `fall_protection_used` only above a slope
+    /// where it becomes a safety question.
+    private static let roofFields: [TemplateField] = [
+        TemplateField(
+            key: "roof_material",
+            label: "Roof material",
+            kind: .choice(["asphalt_shingle", "tile", "metal", "other"]),
+            requirement: .always
+        ),
+        TemplateField(
+            key: "roof_material_other",
+            label: "Describe the material",
+            kind: .text(multiline: false),
+            visibility: .equals(field: "roof_material", value: .choice("other")),
+            requirement: .equals(field: "roof_material", value: .choice("other")),
+            validation: TemplateField.Validation(maximumLength: 120)
+        ),
+        TemplateField(
+            key: "slope_degrees",
+            label: "Slope",
+            kind: .number(unit: "degrees"),
+            requirement: .always,
+            validation: TemplateField.Validation(minimum: 0, maximum: 90)
+        ),
+        TemplateField(
+            key: "fall_protection_used",
+            label: "Fall protection used",
+            kind: .boolean,
+            visibility: .greaterThan(field: "slope_degrees", value: 30),
+            requirement: .greaterThan(field: "slope_degrees", value: 30)
+        ),
+        TemplateField(
+            key: "access_notes",
+            label: "Access notes",
+            kind: .text(multiline: true),
+            validation: TemplateField.Validation(maximumLength: 2000)
+        )
+    ]
+
+    /// Evidence the template demands, as opposed to data it collects.
+    private static let roofCaptureRequirements: [CaptureRequirement] = [
+        CaptureRequirement(key: "elevation_photos", label: "Elevations", kind: .photo, minimumCount: 4),
+        CaptureRequirement(
+            key: "damage_closeups",
+            label: "Damage close-ups",
+            kind: .photo,
+            minimumCount: 2,
+            condition: .equals(field: "roof_material", value: .choice("asphalt_shingle"))
+        )
+    ]
 }

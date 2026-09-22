@@ -98,7 +98,7 @@ struct ErrorMapperTests {
             code: "CONFLICT_VERSION_MISMATCH",
             httpStatus: 409,
             retryable: false,
-            details: APIError.Details(
+            details: APIErrorDetails(
                 entityType: "finding",
                 conflictingFields: ["measurement_value"]
             )
@@ -152,7 +152,7 @@ struct ErrorMapperTests {
             code: "CLIENT_VERSION_UNSUPPORTED",
             httpStatus: 426,
             retryable: false,
-            details: APIError.Details(minimumVersion: "2.4.0")
+            details: APIErrorDetails(minimumVersion: "2.4.0")
         )
 
         #expect(

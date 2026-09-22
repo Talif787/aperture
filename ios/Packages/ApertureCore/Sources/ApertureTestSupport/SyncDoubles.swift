@@ -186,50 +186,51 @@ public final class InMemorySyncServer: SyncTransport, Sendable {
 
         return storage.withLock { current in
             operations.map { operation in
-                // Replay before anything else. A retry after an unknown outcome must
-                // return the original answer, not a second application.
-                if let stored = current.idempotencyKeys[operation.idempotencyKey] {
-                    switch stored {
-                    case .applied(_, let version):
-                        return .replayed(operationID: operation.id, serverVersion: version)
-                    default:
-                        return stored
-                    }
-                }
-
-                var entity = current.entities[operation.entityID]
-                    ?? Entity(version: 0, fields: [:], hlc: operation.hlc)
-
-                let result: PushResult
-                if entity.version != operation.baseVersion {
-                    // A version mismatch alone is not a conflict. Only an overlapping
-                    // field is, which is the same rule the client applies.
-                    let overlapping = operation.dirtyFields.intersection(Set(entity.fields.keys))
-                    if overlapping.isEmpty {
-                        entity.version += 1
-                        entity.hlc = operation.hlc
-                        for field in operation.dirtyFields { entity.fields[field] = operation.id.description }
-                        current.entities[operation.entityID] = entity
-                        result = .applied(operationID: operation.id, serverVersion: entity.version)
-                    } else {
-                        result = .conflict(
-                            operationID: operation.id,
-                            serverVersion: entity.version,
-                            conflictingFields: overlapping
-                        )
-                    }
-                } else {
-                    entity.version += 1
-                    entity.hlc = operation.hlc
-                    for field in operation.dirtyFields { entity.fields[field] = operation.id.description }
-                    current.entities[operation.entityID] = entity
-                    result = .applied(operationID: operation.id, serverVersion: entity.version)
-                }
-
+                let result = Self.outcome(for: operation, in: &current)
                 current.idempotencyKeys[operation.idempotencyKey] = result
                 return result
             }
         }
+    }
+
+    /// Decides one operation against current server state.
+    ///
+    /// Split out of `pushDeltas` so the replay check, the version comparison, and the
+    /// write are each readable on their own. The replay check has to come first: a retry
+    /// after an unknown outcome must return the original answer, and evaluating anything
+    /// before it leaves a window where the effect applies twice.
+    private static func outcome(for operation: SyncOperation, in current: inout Storage) -> PushResult {
+        if let stored = current.idempotencyKeys[operation.idempotencyKey] {
+            if case .applied(_, let version) = stored {
+                return .replayed(operationID: operation.id, serverVersion: version)
+            }
+            return stored
+        }
+
+        var entity = current.entities[operation.entityID]
+            ?? Entity(version: 0, fields: [:], hlc: operation.hlc)
+
+        // A version mismatch alone is not a conflict. Only an overlapping field is, which
+        // is the same rule the client applies.
+        if entity.version != operation.baseVersion {
+            let overlapping = operation.dirtyFields.intersection(Set(entity.fields.keys))
+            guard overlapping.isEmpty else {
+                return .conflict(
+                    operationID: operation.id,
+                    serverVersion: entity.version,
+                    conflictingFields: overlapping
+                )
+            }
+        }
+
+        entity.version += 1
+        entity.hlc = operation.hlc
+        for field in operation.dirtyFields {
+            entity.fields[field] = operation.id.description
+        }
+        current.entities[operation.entityID] = entity
+
+        return .applied(operationID: operation.id, serverVersion: entity.version)
     }
 }
 

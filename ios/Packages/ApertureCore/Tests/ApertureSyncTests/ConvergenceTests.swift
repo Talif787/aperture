@@ -104,51 +104,7 @@ struct ConvergenceTests {
 
         for step in history {
             applied.append(step)
-
-            switch step {
-            case .localEdit(let entity, let field):
-                let operation = SyncOperation(
-                    id: OperationID(generatedAt: world.dateProvider.now, random: world.random),
-                    entityType: "finding",
-                    entityID: entity,
-                    kind: .update,
-                    dirtyFields: [field],
-                    baseVersion: world.server.entities[entity]?.version ?? 0,
-                    hlc: world.clock.send(),
-                    createdAt: world.dateProvider.now
-                )
-                try await world.queue.enqueue(operation)
-
-            case .remoteEdit(let entity, let field):
-                world.server.applyServerEdit(
-                    entityID: entity,
-                    fields: [field: "server-value"],
-                    hlc: HybridLogicalClock(
-                        wallClockMilliseconds: UInt64(
-                            world.dateProvider.now.timeIntervalSince1970 * 1000
-                        ),
-                        counter: 0,
-                        nodeID: "srv1"
-                    )
-                )
-
-            case .synchronize:
-                _ = try? await world.engine.synchronize()
-
-            case .transportFailure:
-                world.server.failNextPush(
-                    with: DomainError.unrecoverable(code: "ERR-4602", correlationID: "gen")
-                )
-                _ = try? await world.engine.synchronize()
-
-            case .terminate:
-                // The process dies. The queue is durable, so it survives, but whatever was
-                // in flight is now of unknown outcome and must be re-driven.
-                _ = try await world.engine.reconcileAfterLaunch()
-
-            case .advanceClock(let seconds):
-                world.dateProvider.advance(by: seconds)
-            }
+            try await apply(step, in: world)
         }
 
         // Let the network settle.
@@ -156,9 +112,7 @@ struct ConvergenceTests {
         // Time advances between cycles, which is not a detail. A backed-off operation is
         // waiting for a deadline, so a settle loop with a frozen clock asks the same
         // question twelve times and gets the same answer: the operation is correctly
-        // backed off and the moment never arrives. That is an artifact of the harness, not
-        // a property of the engine, and it made this suite report divergence for an
-        // operation that was behaving exactly as designed.
+        // backed off and the moment never arrives.
         for _ in 0..<12 {
             world.dateProvider.advance(by: 600)
             _ = try await world.engine.reconcileAfterLaunch()
@@ -174,14 +128,6 @@ struct ConvergenceTests {
         // `depth` counts operations that are not dead, so the property is that it reaches
         // zero: everything either reached the server, was resolved as a conflict, or was
         // dead-lettered and is visible to the user.
-        //
-        // The earlier form compared this count against the number of dead operations,
-        // which holds only when both are zero. Fourteen seeds passed it for that reason
-        // rather than because the property held, which is the kind of assertion that
-        // makes a suite look stronger than it is.
-        // Built as a value first. A Comment is expressible by a string literal, including
-        // interpolation, but a concatenation is an expression rather than a literal and
-        // the conversion never fires.
         let outstandingDetail = "seed \(seed): \(outstanding) neither applied nor dead-lettered, "
             + "\(dead.count) dead. History: \(trace)"
 
@@ -189,10 +135,60 @@ struct ConvergenceTests {
 
         // Nothing may be left in flight. An operation stuck there was dispatched and never
         // accounted for, which is silent loss wearing the costume of pending work.
-        #expect(
-            stranded.isEmpty,
-            "seed \(seed): \(stranded.count) operation(s) stranded in flight. History: \(trace)"
-        )
+        let strandedDetail = "seed \(seed): \(stranded.count) stranded in flight. History: \(trace)"
+
+        #expect(stranded.isEmpty, "\(strandedDetail)")
+    }
+
+    /// Applies one generated step to the world.
+    ///
+    /// Separated from the loop so the property being asserted stays visible. A test whose
+    /// setup is longer than its assertion is one nobody reads to the end.
+    private func apply(_ step: Step, in world: World) async throws {
+        switch step {
+        case .localEdit(let entity, let field):
+            let operation = SyncOperation(
+                id: OperationID(generatedAt: world.dateProvider.now, random: world.random),
+                entityType: "finding",
+                entityID: entity,
+                kind: .update,
+                dirtyFields: [field],
+                baseVersion: world.server.entities[entity]?.version ?? 0,
+                hlc: world.clock.send(),
+                createdAt: world.dateProvider.now
+            )
+            try await world.queue.enqueue(operation)
+
+        case .remoteEdit(let entity, let field):
+            world.server.applyServerEdit(
+                entityID: entity,
+                fields: [field: "server-value"],
+                hlc: HybridLogicalClock(
+                    wallClockMilliseconds: UInt64(
+                        world.dateProvider.now.timeIntervalSince1970 * 1000
+                    ),
+                    counter: 0,
+                    nodeID: "srv1"
+                )
+            )
+
+        case .synchronize:
+            _ = try? await world.engine.synchronize()
+
+        case .transportFailure:
+            world.server.failNextPush(
+                with: DomainError.unrecoverable(code: "ERR-4602", correlationID: "gen")
+            )
+            _ = try? await world.engine.synchronize()
+
+        case .terminate:
+            // The process dies. The queue is durable, so it survives, but whatever was in
+            // flight is now of unknown outcome and must be re-driven.
+            _ = try await world.engine.reconcileAfterLaunch()
+
+        case .advanceClock(let seconds):
+            world.dateProvider.advance(by: seconds)
+        }
     }
 
     @Test(

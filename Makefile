@@ -40,6 +40,7 @@ schema: ## Execute the sync queue DDL against SQLite and assert its behavior
 .PHONY: lint-config
 lint-config: ## Validate every YAML and JSON configuration file
 	@python3 scripts/validate_configs.py
+	@python3 scripts/check_swift_lengths.py
 
 # ------------------------------------------------------------- Swift (Linux and macOS)
 

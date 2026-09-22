@@ -173,6 +173,15 @@ def check_acyclic() -> list[Violation]:
     ]
 
 
+# Build products and dependency checkouts are not our code. SPM materializes every
+# dependency under .build, and a checker that walks them reports findings nobody can act on.
+SKIPPED_PARTS = {".build", "checkouts", "DerivedData", ".git"}
+
+
+def is_ours(path) -> bool:
+    return not any(part in SKIPPED_PARTS or part.startswith(".") for part in path.parts)
+
+
 def main() -> int:
     if not PACKAGES_ROOT.is_dir():
         print(f"error: {PACKAGES_ROOT} not found. Run from the repository root.", file=sys.stderr)

@@ -518,6 +518,7 @@ make db-verify          && echo "6/6 tenant isolation in the database"
 | 426 on every request | A stale `X-Aperture-Client-Version` header in your shell history | Omit the header, or send a current version |
 | `go: command not found` | PATH not reloaded after a recycle | `source ~/.bashrc` |
 | CI lint fails on formatting though tests pass | `go test` compiles, it does not check gofmt | `make backend-fmt`, or `make ci-local` before pushing |
+| `make check` reports hundreds of Swift findings | A checker is walking `.build`, where SPM materializes every dependency's sources | Fixed in the current archive. Otherwise `rm -rf ios/Packages/*/.build` and re-run |
 | CI lint fails but nothing runs on a push to main | `pull-request.yml` triggers on pull requests and manual dispatch only | `gh workflow run pull-request --ref main`, or open a pull request |
 | Go tests fail to build | Module cache | `cd backend && go clean -modcache && go mod download` |
 | `db-status` shows no tables | Volume gone: recycle, `down -v`, or a prune | `make db-migrate && make db-seed` |

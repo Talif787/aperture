@@ -18,6 +18,14 @@ TEST_ROOTS = [
     REPO_ROOT / "ios" / "Packages" / "AperturePlatform" / "Tests",
 ]
 
+# Build products and dependency checkouts are not our code. SPM materializes every
+# dependency under .build, and a checker that walks them reports findings nobody can act on.
+SKIPPED_PARTS = {".build", "checkouts", "DerivedData", ".git"}
+
+
+def is_ours(path) -> bool:
+    return not any(part in SKIPPED_PARTS or part.startswith(".") for part in path.parts)
+
 SUITE_PATTERN = re.compile(r'@Suite\(\s*\n?\s*"([^"]+)"[^)]*\)\s*\n\s*struct\s+(\w+)')
 
 
@@ -27,7 +35,7 @@ def main() -> int:
     for root in TEST_ROOTS:
         if not root.is_dir():
             continue
-        for path in sorted(root.rglob("*.swift")):
+        for path in sorted(p for p in root.rglob("*.swift") if is_ours(p)):
             text = path.read_text(encoding="utf-8")
             for match in SUITE_PATTERN.finditer(text):
                 rows.append((match.group(1), match.group(2), path.name))
