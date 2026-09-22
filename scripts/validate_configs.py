@@ -165,6 +165,53 @@ def check_go_alignment() -> list[str]:
     return problems
 
 
+
+def check_go_lint_patterns() -> list[str]:
+    """Two golangci-lint findings this project keeps producing, checked locally.
+
+    Neither is subtle once named, and both cost a CI round trip every time. `revive` wants
+    context.Context first; `errorlint` wants errors.Is rather than a direct comparison,
+    because a direct comparison stops matching the moment any caller wraps the error and
+    the test then reports success for something it never recognised.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+    signature = re.compile(r'func \w+\(([^)]*)\)')
+    # The package qualifier is optional: an error compared within its own package has the
+    # same defect and was slipping through a pattern that required one.
+    comparison = re.compile(r'(?:!=|==)\s+(?:\w+\.)?Err[A-Z]\w*')
+
+    for path in sorted(backend.rglob("*.go")):
+        relative = path.relative_to(REPO_ROOT)
+
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("//"):
+                continue
+
+            match = signature.search(line)
+            if match and "context.Context" in match.group(1):
+                parameters = [p.strip() for p in match.group(1).split(",")]
+                if parameters and "context.Context" not in parameters[0]:
+                    problems.append(
+                        f"{relative}:{number}: context.Context should be the first parameter"
+                    )
+
+            if comparison.search(line) and "errors.Is" not in line:
+                problems.append(
+                    f"{relative}:{number}: compare errors with errors.Is, not == or !=; "
+                    f"a direct comparison fails on a wrapped error"
+                )
+
+    if not problems:
+        print("Go lint patterns: context ordering and error comparison look clean")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -197,6 +244,7 @@ def main() -> int:
     failures.extend(check_golangci_version_alignment())
     failures.extend(check_go_module_floor())
     failures.extend(check_go_alignment())
+    failures.extend(check_go_lint_patterns())
 
     if failures:
         print("\nConfiguration errors:")

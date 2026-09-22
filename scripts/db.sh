@@ -314,20 +314,33 @@ verify-rls)
   if root_sql -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='sync_entities'" \
       </dev/null | grep -q 1; then
 
-    a_entities=$(app_scoped_value "${TENANT_A}" "SELECT count(*) FROM sync_entities")
-    b_entities=$(app_scoped_value "${TENANT_B}" "SELECT count(*) FROM sync_entities")
+    # Asserted on specific rows rather than on counts.
+    #
+    # A count assumes nothing else shares the table, and the store integration tests write
+    # into it legitimately. A check that breaks because unrelated valid data appeared is a
+    # check people start ignoring, and the property being tested here is visibility of a
+    # known row, not the size of the table.
+    a_own=$(app_scoped_value "${TENANT_A}" \
+        "SELECT count(*) FROM sync_entities WHERE entity_id = 'seed-finding-a'")
+    a_foreign=$(app_scoped_value "${TENANT_A}" \
+        "SELECT count(*) FROM sync_entities WHERE entity_id = 'seed-finding-b'")
+    b_own=$(app_scoped_value "${TENANT_B}" \
+        "SELECT count(*) FROM sync_entities WHERE entity_id = 'seed-finding-b'")
     no_scope_entities=$(app_value "SELECT count(*) FROM sync_entities")
 
-    [[ "${a_entities}" == "1" ]] && pass "tenant A sees its own sync entity" \
-                                 || fail "tenant A saw '${a_entities}' entities, expected 1"
-    [[ "${b_entities}" == "1" ]] && pass "tenant B sees its own sync entity" \
-                                 || fail "tenant B saw '${b_entities}' entities, expected 1"
+    [[ "${a_own}" == "1" ]] && pass "tenant A sees its own sync entity" \
+                            || fail "tenant A could not see seed-finding-a (got '${a_own}')"
+    [[ "${a_foreign}" == "0" ]] && pass "tenant A cannot see tenant B's sync entity" \
+                                || fail "tenant A saw seed-finding-b (got '${a_foreign}')"
+    [[ "${b_own}" == "1" ]] && pass "tenant B sees its own sync entity" \
+                            || fail "tenant B could not see seed-finding-b (got '${b_own}')"
     [[ "${no_scope_entities}" == "0" ]] && pass "an unscoped session sees no sync entities" \
                                         || fail "an unscoped session saw '${no_scope_entities}'"
 
-    a_changes=$(app_scoped_value "${TENANT_A}" "SELECT count(*) FROM sync_changes")
-    [[ "${a_changes}" == "1" ]] && pass "the change log is scoped to the tenant" \
-                                || fail "tenant A saw '${a_changes}' changes, expected 1"
+    a_changes=$(app_scoped_value "${TENANT_A}" \
+        "SELECT count(*) FROM sync_changes WHERE entity_id = 'seed-finding-b'")
+    [[ "${a_changes}" == "0" ]] && pass "the change log is scoped to the tenant" \
+                                || fail "tenant A saw tenant B's change (got '${a_changes}')"
 
     # Append-only, as a grant rather than a convention: a client's view of history cannot
     # be rewritten under it by any code path, including a buggy one.

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,9 +54,9 @@ func newTestStore(t *testing.T) (*Postgres, func()) {
 		t.Fatalf("connecting as admin: %v", err)
 	}
 
-	applyMigrations(t, ctx, admin)
-	seedTenants(t, ctx, admin)
-	appURL := ensureApplicationRole(t, ctx, admin, adminURL)
+	applyMigrations(ctx, t, admin)
+	seedTenants(ctx, t, admin)
+	appURL := ensureApplicationRole(ctx, t, admin, adminURL)
 
 	if err := admin.Close(ctx); err != nil {
 		t.Fatalf("closing admin connection: %v", err)
@@ -70,7 +71,7 @@ func newTestStore(t *testing.T) (*Postgres, func()) {
 	return store, store.Close
 }
 
-func applyMigrations(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+func applyMigrations(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 
 	// Reset first. A test suite that depends on leftover state from a previous run fails
@@ -113,7 +114,7 @@ func applyMigrations(t *testing.T, ctx context.Context, conn *pgx.Conn) {
 	}
 }
 
-func seedTenants(t *testing.T, ctx context.Context, conn *pgx.Conn) {
+func seedTenants(ctx context.Context, t *testing.T, conn *pgx.Conn) {
 	t.Helper()
 
 	const insert = `
@@ -131,7 +132,12 @@ func seedTenants(t *testing.T, ctx context.Context, conn *pgx.Conn) {
 	}
 }
 
-func ensureApplicationRole(t *testing.T, ctx context.Context, conn *pgx.Conn, adminURL string) string {
+func ensureApplicationRole(
+	ctx context.Context,
+	t *testing.T,
+	conn *pgx.Conn,
+	adminURL string,
+) string {
 	t.Helper()
 
 	// The role is created by 0002_grants.sql. Confirm the attributes rather than assume
@@ -236,7 +242,10 @@ func TestTenantCannotReadAnotherTenantsEntity(t *testing.T) {
 	if err == nil {
 		t.Fatal("tenant B read tenant A's entity")
 	}
-	if err != syncapi.ErrEntityNotFound {
+	// errors.Is rather than ==. The store wraps errors as it adds context, and a direct
+	// comparison passes today and silently stops matching the first time a caller adds a
+	// %w. The test would then report success for an error it never actually recognised.
+	if !errors.Is(err, syncapi.ErrEntityNotFound) {
 		t.Fatalf("expected ErrEntityNotFound, got %v", err)
 	}
 }
