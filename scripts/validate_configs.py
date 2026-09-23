@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -266,6 +267,123 @@ def check_go_lint_patterns() -> list[str]:
     return problems
 
 
+
+def check_go_module_freshness() -> list[str]:
+    """Catch a go.mod that disagrees with the source, before it reaches CI.
+
+    An archive overlay replaces go.mod with the version that ships the pinned requirement
+    and nothing else; the indirect requirements are regenerated locally. Committing that
+    alongside an existing go.sum leaves the two disagreeing, and every Go command fails
+    while loading the module graph, before it does anything the error mentions.
+
+    Skipped when no toolchain is present, because this script is meant to run anywhere.
+    """
+    import shutil
+    import subprocess
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir() or not (backend / "go.sum").is_file():
+        return []
+
+    if shutil.which("go") is None:
+        print("Go module freshness: skipped, no toolchain on PATH")
+        return []
+
+    try:
+        result = subprocess.run(
+            ["go", "mod", "tidy", "-diff"],
+            cwd=backend,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "GOTOOLCHAIN": "local"},
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"Go module freshness: skipped, {error}")
+        return []
+
+    if result.returncode == 0:
+        print("Go module freshness: go.mod matches the source")
+        return []
+
+    return [
+        "backend/go.mod is out of date with the source, usually because an archive "
+        "overlay replaced it. Run: make backend-deps"
+    ]
+
+
+
+# The method names go vet's stdmethods check reserves, with the return shape each implies.
+#
+# This is vet's actual list, not a guess at it. Close, String, Read and Write are
+# deliberately absent: vet does not check them, and flagging them produces false positives
+# on perfectly ordinary code (pgxpool's own Close returns nothing). A checker that invents
+# rules the real tool does not enforce trains people to ignore it.
+STANDARD_METHOD_RETURNS = {
+    "Format": "",
+    "GobDecode": "error",
+    "GobEncode": "([]byte, error)",
+    "Is": "bool",
+    "MarshalJSON": "([]byte, error)",
+    "MarshalXML": "error",
+    "Peek": "([]byte, error)",
+    "ReadByte": "(byte, error)",
+    "ReadFrom": "(int64, error)",
+    "ReadRune": "(rune, int, error)",
+    "Scan": "error",
+    "Seek": "(int64, error)",
+    "UnmarshalJSON": "error",
+    "UnmarshalXML": "error",
+    "UnreadByte": "error",
+    "UnreadRune": "error",
+    "Unwrap": "error",
+    "WriteByte": "error",
+    "WriteTo": "(int64, error)",
+}
+
+
+def check_go_standard_methods() -> list[str]:
+    """Flag a method named after a standard interface with the wrong return shape.
+
+    A method named WriteTo that returns only an error reads as a broken io.WriterTo to
+    every tool and every reader. The fix is the name, not the signature: contorting an API
+    to return a byte count nothing uses would be satisfying the check rather than the point.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+    pattern = re.compile(r'^func \([^)]+\) (\w+)\(([^)]*)\)\s*(.*?)\s*\{$', re.MULTILINE)
+
+    for path in sorted(backend.rglob("*.go")):
+        text = path.read_text(encoding="utf-8")
+
+        for match in pattern.finditer(text):
+            name, returns = match.group(1), match.group(3).strip()
+
+            if name not in STANDARD_METHOD_RETURNS:
+                continue
+
+            expected = STANDARD_METHOD_RETURNS[name]
+            if returns == expected:
+                continue
+
+            line = text[:match.start()].count("\n") + 1
+            problems.append(
+                f"{path.relative_to(REPO_ROOT)}:{line}: method {name} returns "
+                f"{returns or 'nothing'}, but go vet reserves that name for a method "
+                f"returning {expected or 'nothing'}. Rename it."
+            )
+
+    if not problems:
+        print("Go standard method names: no shadowed interfaces")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -299,6 +417,8 @@ def main() -> int:
     failures.extend(check_go_module_floor())
     failures.extend(check_go_alignment())
     failures.extend(check_go_lint_patterns())
+    failures.extend(check_go_module_freshness())
+    failures.extend(check_go_standard_methods())
 
     if failures:
         print("\nConfiguration errors:")

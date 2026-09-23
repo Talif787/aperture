@@ -10,7 +10,7 @@ func render(t *testing.T, registry *Registry) string {
 	t.Helper()
 
 	var builder strings.Builder
-	if err := registry.WriteTo(&builder); err != nil {
+	if err := registry.Render(&builder); err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
 	return builder.String()

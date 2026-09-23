@@ -94,8 +94,8 @@ md5sum aperture-phase-8.zip
 unzip -oq aperture-phase-8.zip
 cd ~/aperture && chmod +x scripts/*.sh scripts/*.py
 
-# Always, after an archive touches the backend. The archive ships a go.mod carrying only
-# the pinned requirement; the indirect ones are regenerated locally.
+# Only needed if an archive changed backend/go.mod, which archives from Phase 8 onward
+# no longer do: the pin is committed, so overwriting it would only revert your local tidy.
 make backend-deps
 ```
 
@@ -187,6 +187,7 @@ cd ~/aperture
 
 make check                     # includes the Go alignment and lint pattern checks
 make backend-fmt-check
+make backend-vet               # go test runs only a subset of vet
 make backend-test              # 17 new tests across metrics and httpx
 make metrics-scenarios         # 17 assertions against the running service
 ```
@@ -402,7 +403,9 @@ make metrics-scenarios         && echo "7/7 metrics scenarios"
 | Scrape output reorders between calls | Should not happen | The registry sorts. Report it, since a test depends on it |
 | `port is already allocated` on 9090 | Something else is bound | `APERTURE_METRICS_ADDR=127.0.0.1:9091 make api-up`, and set `METRICS_URL` for the scenarios |
 | Metrics reachable on 8080 | Should not happen | The listeners are separate servers. Check `APERTURE_METRICS_ADDR` |
-| `updates to go.mod needed` | An archive overlay replaced `go.mod` | `make backend-deps` |
+| `updates to go.mod needed` | `go.mod` and `go.sum` disagree, usually after an overlay replaced one of them | `make backend-deps`, then commit both together. `make check` now catches this when Go is on PATH |
+| CI fails on `go vet` with the same message | The mismatch was committed | Same fix. `go.sum` is only meaningful against the `go.mod` that produced it |
+| `method WriteTo should have signature ...` | A method named after a standard interface with a different shape; `go test` does not run this vet check | Rename the method. `make backend-vet` and `make check` both catch it now |
 | `no space left on device` | The 5 GB `$HOME` is full | `rm -rf ios/Packages/*/.build`, `go clean -cache -modcache`, `rm -rf ~/go/pkg/mod/golang.org/toolchain*` |
 | `make: *** [api-down] Terminated` | Fixed in Phase 6b | Update to the current archive |
 | Everything worked yesterday, nothing today | VM recycled: images, containers, volumes and processes gone | Part 2, Part 4 |

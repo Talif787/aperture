@@ -109,6 +109,6 @@ func (r *Recorder) Handler() http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		writer.WriteHeader(http.StatusOK)
-		_ = r.registry.WriteTo(writer)
+		_ = r.registry.Render(writer)
 	})
 }

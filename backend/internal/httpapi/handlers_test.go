@@ -257,7 +257,7 @@ func TestPushRecordsEachOutcome(t *testing.T) {
 	handlers.pushDeltas(httptest.NewRecorder(), scopedRequest(http.MethodPost, "/v1/sync/deltas", body))
 
 	var builder strings.Builder
-	if err := registry.WriteTo(&builder); err != nil {
+	if err := registry.Render(&builder); err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
 	output := builder.String()
@@ -291,7 +291,7 @@ func TestConflictingFieldsAreCounted(t *testing.T) {
 	handlers.pushDeltas(httptest.NewRecorder(), scopedRequest(http.MethodPost, "/v1/sync/deltas", conflict))
 
 	var builder strings.Builder
-	_ = registry.WriteTo(&builder)
+	_ = registry.Render(&builder)
 
 	// Labelled by field, which is bounded because field keys come from a template rather
 	// than from user input. A rising count on measurement_value specifically is the signal

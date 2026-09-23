@@ -196,6 +196,11 @@ backend-deps-check: ## Fail with an instruction when dependencies are missing or
 		exit 1; \
 	fi
 
+.PHONY: backend-vet
+backend-vet: backend-deps-check ## Run the full go vet, which go test only partly covers
+	@cd backend && GOTOOLCHAIN=local go vet ./...
+	@echo "vet: clean"
+
 .PHONY: backend-test
 backend-test: backend-deps-check ## Run backend tests with the race detector
 	@cd $(BACKEND_DIR) && go test -race -count=1 ./...
@@ -402,7 +407,7 @@ bootstrap: ## Set up a fresh clone for development
 	@./scripts/bootstrap.sh
 
 .PHONY: ci-local
-ci-local: check backend-fmt-check backend-test ## Run what the pull request job runs, locally
+ci-local: check backend-fmt-check backend-vet backend-test ## Run what the pull request job runs, locally
 	@if command -v swift >/dev/null 2>&1; then \
 		$(MAKE) core-test; \
 	else \

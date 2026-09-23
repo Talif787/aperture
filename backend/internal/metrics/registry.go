@@ -205,12 +205,12 @@ func escapeValue(value string) string {
 	return replacer.Replace(value)
 }
 
-// WriteTo renders the registry in Prometheus exposition format.
+// Render writes the registry in Prometheus exposition format.
 //
 // Output is deterministic: metrics in registration order, series sorted within each. A
 // scrape endpoint whose output reorders between calls makes every diff unreadable and
 // every test flaky.
-func (r *Registry) WriteTo(writer io.Writer) error {
+func (r *Registry) Render(writer io.Writer) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

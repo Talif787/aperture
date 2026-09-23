@@ -57,7 +57,7 @@ func TestMetricsMiddlewareRecordsEveryRequest(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/me", nil))
 
 	var builder strings.Builder
-	if err := registry.WriteTo(&builder); err != nil {
+	if err := registry.Render(&builder); err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
 	output := builder.String()
@@ -81,7 +81,7 @@ func TestDurationIsNotLabelledByStatus(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/me", nil))
 
 	var builder strings.Builder
-	_ = registry.WriteTo(&builder)
+	_ = registry.Render(&builder)
 
 	// Mixing status into the latency histogram makes a quantile meaningless when the error
 	// rate moves: fast failures drag the distribution down exactly when things are going
@@ -108,7 +108,7 @@ func TestUnauthenticatedRequestsAreStillCounted(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/me", nil))
 
 	var builder strings.Builder
-	_ = registry.WriteTo(&builder)
+	_ = registry.Render(&builder)
 
 	if !strings.Contains(builder.String(), `status="401"`) {
 		t.Fatalf("a rejected request was not counted:\n%s", builder.String())
