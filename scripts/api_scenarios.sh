@@ -135,8 +135,18 @@ result=$(call GET /v1/me "not-a-token")
   && pass "a malformed token is refused" \
   || fail "malformed token returned $(echo "${result}" | status_of)"
 
-# Same token with one character of the signature changed.
-TAMPERED="${TOKEN_A%?}X"
+# The payload is tampered, not the signature.
+#
+# A signature's final base64url character carries only two bits, so several characters
+# decode to identical bytes. Flipping the last one can leave the signature unchanged, and
+# the test then passes or fails depending on which character it happened to be. Changing
+# the payload alters the signed input, which cannot be a no-op.
+TAMPERED=$(python3 -c "
+import sys
+header, payload, signature = sys.argv[1].split('.')
+payload = ('B' if payload[0] == 'A' else 'A') + payload[1:]
+print('.'.join([header, payload, signature]))
+" "${TOKEN_A}")
 result=$(call GET /v1/me "${TAMPERED}")
 [[ "$(echo "${result}" | status_of)" == "401" ]] \
   && pass "a tampered signature is refused" \
@@ -160,7 +170,13 @@ detail "the tenant comes from the signed token, never from a header"
 
 section "Push, replay, and conflict"
 
-FINDING="f-$(date +%s)"
+# Unique per run, both the entity and every operation id.
+#
+# Idempotency is keyed by tenant and operation id, so a fixed id returns the stored result
+# from a previous run the moment the store persists. The replay scenario below still sends
+# one id twice, deliberately; it just has to be a different pair each run.
+RUN_ID="$(date +%s)-$$"
+FINDING="f-${RUN_ID}"
 
 create_body() {
   cat <<JSON
@@ -172,28 +188,28 @@ create_body() {
 JSON
 }
 
-result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body op-create-1 create note 0 'first observation')")
+result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body "op-create-1-${RUN_ID}" create note 0 'first observation')")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 version=$(echo "${result}" | body_of | json_field results.0.server_version)
 [[ "${status}" == "applied" && "${version}" == "1" ]] \
   && pass "a create applies at version 1" \
   || fail "expected applied/1, got ${status}/${version}"
 
-result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body op-create-1 create note 0 'first observation')")
+result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body "op-create-1-${RUN_ID}" create note 0 'first observation')")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 [[ "${status}" == "replayed" ]] \
   && pass "the same operation identifier replays rather than reapplying" \
   || fail "expected replayed, got ${status}"
 detail "exactly-once effect over an at-least-once channel"
 
-result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body op-sev-1 update severity 0 'major')")
+result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body "op-sev-1-${RUN_ID}" update severity 0 'major')")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 [[ "${status}" == "applied" ]] \
   && pass "a concurrent edit to a different field applies" \
   || fail "expected applied, got ${status}"
 detail "a version mismatch alone is not a conflict, only an overlapping field is"
 
-result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body op-note-2 update note 0 'contradicting note')")
+result=$(call POST /v1/sync/deltas "${TOKEN_A}" "$(create_body "op-note-2-${RUN_ID}" update note 0 'contradicting note')")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 fields=$(echo "${result}" | body_of | json_field results.0.conflicting_fields)
 [[ "${status}" == "conflict" ]] \
@@ -211,14 +227,14 @@ result=$(call POST /v1/sync/deltas "${TOKEN_A}" '{"operations":[]}')
   || fail "empty batch returned $(echo "${result}" | status_of)"
 
 result=$(call POST /v1/sync/deltas "${TOKEN_A}" \
-  '{"operations":[{"operation_id":"op-x","entity_type":"finding","entity_id":"f-x","kind":"create","dirty_fields":["note"],"hlc":"h","surprise":"value"}]}')
+  "$(printf '{"operations":[{"operation_id":"op-x-%s","entity_type":"finding","entity_id":"f-x-%s","kind":"create","dirty_fields":["note"],"hlc":"h","surprise":"value"}]}' "${RUN_ID}" "${RUN_ID}")")
 [[ "$(echo "${result}" | status_of)" == "400" ]] \
   && pass "an unknown field is refused rather than ignored" \
   || fail "unknown field returned $(echo "${result}" | status_of)"
 detail "silently discarding it is how a protocol drifts unnoticed"
 
 result=$(call POST /v1/sync/deltas "${TOKEN_A}" \
-  '{"operations":[{"operation_id":"op-y","entity_type":"finding","entity_id":"f-y","kind":"update","base_version":0,"hlc":"h"}]}')
+  "$(printf '{"operations":[{"operation_id":"op-y-%s","entity_type":"finding","entity_id":"f-y-%s","kind":"update","base_version":0,"hlc":"h"}]}' "${RUN_ID}" "${RUN_ID}")")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 [[ "${status}" == "rejected" ]] \
   && pass "an operation without dirty_fields is rejected" \
@@ -226,11 +242,11 @@ status=$(echo "${result}" | body_of | json_field results.0.status)
 detail "without them the server can only compare versions, clobbering untouched fields"
 
 result=$(call POST /v1/sync/deltas "${TOKEN_A}" \
-  '{"operations":[
-     {"operation_id":"op-ok-1","entity_type":"finding","entity_id":"f-batch","kind":"create","dirty_fields":["note"],"base_version":0,"hlc":"h","payload":{"note":"a"}},
-     {"operation_id":"op-bad-1","entity_type":"finding","entity_id":"f-batch2","kind":"nonsense","dirty_fields":["note"],"hlc":"h"},
-     {"operation_id":"op-ok-2","entity_type":"finding","entity_id":"f-batch3","kind":"create","dirty_fields":["note"],"base_version":0,"hlc":"h","payload":{"note":"b"}}
-   ]}')
+  "$(printf '{"operations":[
+     {"operation_id":"op-ok-1-%s","entity_type":"finding","entity_id":"f-batch-%s","kind":"create","dirty_fields":["note"],"base_version":0,"hlc":"h","payload":{"note":"a"}},
+     {"operation_id":"op-bad-1-%s","entity_type":"finding","entity_id":"f-batch2-%s","kind":"nonsense","dirty_fields":["note"],"hlc":"h"},
+     {"operation_id":"op-ok-2-%s","entity_type":"finding","entity_id":"f-batch3-%s","kind":"create","dirty_fields":["note"],"base_version":0,"hlc":"h","payload":{"note":"b"}}
+   ]}' "${RUN_ID}" "${RUN_ID}" "${RUN_ID}" "${RUN_ID}" "${RUN_ID}" "${RUN_ID}")")
 first=$(echo "${result}" | body_of | json_field results.0.status)
 second=$(echo "${result}" | body_of | json_field results.1.status)
 third=$(echo "${result}" | body_of | json_field results.2.status)
@@ -272,13 +288,39 @@ result=$(call GET "/v1/sync/changes?cursor=not-a-cursor" "${TOKEN_A}")
 
 section "Tenant isolation"
 
+# Asserted on identity, not on a count.
+#
+# A count assumes tenant B has nothing of its own, which is true only against a store that
+# starts empty. Against a persistent one tenant B has its seeded change, and the assertion
+# fails for a reason that has nothing to do with isolation. The property being tested is
+# that tenant A's records are invisible, so that is what gets checked.
 result=$(call GET /v1/sync/changes "${TOKEN_B}")
-count=$(echo "${result}" | body_of | python3 -c "import json,sys; print(len(json.load(sys.stdin)['changes']))")
-[[ "${count}" == "0" ]] \
-  && pass "tenant B sees none of tenant A's changes" \
-  || fail "tenant B saw ${count} changes belonging to tenant A"
+leaked=$(echo "${result}" | body_of | python3 -c "
+import json, sys
+forbidden = sys.argv[1]
+changes = json.load(sys.stdin)['changes']
+print(sum(1 for change in changes if change['entity_id'] == forbidden))
+" "${FINDING}")
 
-result=$(call POST /v1/sync/deltas "${TOKEN_B}" "$(create_body op-create-1 create note 0 'tenant B work')")
+[[ "${leaked}" == "0" ]] \
+  && pass "tenant B cannot see the entity tenant A just created" \
+  || fail "tenant B saw tenant A's entity ${FINDING}"
+
+own=$(echo "${result}" | body_of | python3 -c "
+import json, sys
+changes = json.load(sys.stdin)['changes']
+print(sum(1 for change in changes if change['entity_id'].startswith('seed-finding-b')))
+")
+
+# The other half of the property. A policy that returns nothing to anybody would pass the
+# check above while being just as broken, so tenant B must also still see its own.
+if [[ "${own}" -ge 1 ]]; then
+  pass "tenant B still sees its own seeded change"
+else
+  detail "tenant B has no seeded change; run make db-seed to exercise this half"
+fi
+
+result=$(call POST /v1/sync/deltas "${TOKEN_B}" "$(create_body "op-create-1-${RUN_ID}" create note 0 'tenant B work')")
 status=$(echo "${result}" | body_of | json_field results.0.status)
 [[ "${status}" == "applied" ]] \
   && pass "an identical operation id in another tenant is not a replay" \

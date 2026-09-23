@@ -139,10 +139,14 @@ backend-fmt: ## Format the Go sources in place
 	@echo "formatted"
 
 .PHONY: backend-fmt-check
-backend-fmt-check: ## Fail when any Go source is not gofmt-clean
+backend-fmt-check: ## Fail when any Go source is not gofmt-clean, showing the diff
 	@cd backend && unformatted=$$(gofmt -l .); \
 		if [ -n "$$unformatted" ]; then \
 			echo "not gofmt-clean:"; echo "$$unformatted" | sed 's/^/  /'; \
+			echo; \
+			echo "what gofmt would change:"; \
+			gofmt -d $$unformatted | sed 's/^/  /'; \
+			echo; \
 			echo "run: make backend-fmt"; \
 			exit 1; \
 		fi
@@ -321,6 +325,14 @@ api-token: ## Mint a token: make api-token TENANT=<uuid> SUBJECT=<sub> [ROLES=in
 		-tenant $(or $(TENANT),11111111-1111-4111-a111-111111111111) \
 		-subject $(or $(SUBJECT),00uDANA0001) \
 		-roles $(or $(ROLES),inspector)
+
+.PHONY: metrics
+metrics: ## Scrape the metrics endpoint
+	@curl -s http://localhost:$(or $(METRICS_PORT),9090)/metrics
+
+.PHONY: metrics-scenarios
+metrics-scenarios: ## Drive traffic and assert the metrics moved correctly
+	@./scripts/metrics_scenarios.sh
 
 .PHONY: api-scenarios
 api-scenarios: ## Run every API scenario against the running service

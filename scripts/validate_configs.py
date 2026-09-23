@@ -121,6 +121,52 @@ def check_go_module_floor() -> list[str]:
 
 
 
+
+def alignment_problems(entries, path, line_number) -> list[str]:
+    """Expected columns for one alignment group, following gofmt's outlier rule.
+
+    gofmt does not align a whole group to its longest member. An entry far wider than its
+    neighbours takes a single space and splits the run, and the entries either side align
+    among themselves. Without this the checker asserts one uniform width, which a file can
+    satisfy while being consistently wrong, which is exactly what happened here.
+
+    The ratio is a heuristic, not go/printer's algorithm. It reproduces the cases in this
+    repository and will not reproduce every case; gofmt remains the authority, and
+    `make backend-fmt-check` prints its diff.
+    """
+    import statistics
+
+    lengths = [len(name) for name, _ in entries]
+    median = statistics.median(lengths)
+
+    runs: list[list[tuple[str, int]]] = []
+    current: list[tuple[str, int]] = []
+
+    for entry, length in zip(entries, lengths):
+        if length > 2 * median:
+            if current:
+                runs.append(current)
+            runs.append([entry])
+            current = []
+        else:
+            current.append(entry)
+    if current:
+        runs.append(current)
+
+    problems: list[str] = []
+    for run in runs:
+        width = max(len(name) for name, _ in run)
+        for name, spaces in run:
+            if len(name) + spaces != width + 1:
+                problems.append(
+                    f"{path.relative_to(REPO_ROOT)}:{line_number}: '{name}' is padded to "
+                    f"column {len(name) + spaces}, gofmt wants {width + 1}. "
+                    f"Run: make backend-fmt"
+                )
+
+    return problems
+
+
 def check_go_alignment() -> list[str]:
     """Approximate gofmt's alignment of var, const, and struct field groups.
 
@@ -137,28 +183,36 @@ def check_go_alignment() -> list[str]:
     problems: list[str] = []
     group = re.compile(r'(?:var|const|type \w+ struct) \(?\n((?:\t+\w+\s+\S.*\n)+)')
 
+    # Map literals align the same way and were not covered, which is how a misaligned
+    # allow-list reached CI. A checker that covers most of a rule teaches people the rule
+    # is covered.
+    map_literal = re.compile(r'= map\[[^\]]+\][^{]*\{\n((?:\t+"[^"]*":\s+\S.*\n)+)')
+
     for path in sorted(backend.rglob("*.go")):
         text = path.read_text(encoding="utf-8")
 
-        for match in group.finditer(text):
-            entries = []
+        for match in list(group.finditer(text)) + list(map_literal.finditer(text)):
+            # Grouped by indentation. gofmt aligns each nesting level independently, so
+            # measuring a nested map's inner keys against its outer one reports a
+            # misalignment that does not exist. The checker found exactly that on its
+            # first run, which is a fair argument for probing a new check before
+            # believing it.
+            by_indent: dict[int, list[tuple[str, int]]] = {}
+
             for line in match.group(1).splitlines():
-                parts = re.match(r'^(\t+)(\w+)(\s+)(\S.*)$', line)
+                parts = re.match(r'^(\t+)(\w+|"[^"]*":)(\s+)(\S.*)$', line)
                 if parts:
-                    entries.append((parts.group(2), len(parts.group(3))))
-
-            if len(entries) < 2:
-                continue
-
-            width = max(len(name) for name, _ in entries)
-            for name, spaces in entries:
-                if len(name) + spaces != width + 1:
-                    line_number = text[:match.start()].count("\n") + 1
-                    problems.append(
-                        f"{path.relative_to(REPO_ROOT)}:{line_number}: '{name}' is padded "
-                        f"to column {len(name) + spaces}, gofmt wants {width + 1}. "
-                        f"Run: make backend-fmt"
+                    depth = len(parts.group(1))
+                    by_indent.setdefault(depth, []).append(
+                        (parts.group(2), len(parts.group(3)))
                     )
+
+            for entries in by_indent.values():
+                if len(entries) < 2:
+                    continue
+
+                line_number = text[:match.start()].count("\n") + 1
+                problems.extend(alignment_problems(entries, path, line_number))
 
     if not problems:
         print("Go alignment: var, const, and struct groups look gofmt-clean")

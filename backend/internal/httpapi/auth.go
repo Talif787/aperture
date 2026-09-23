@@ -6,10 +6,12 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/talif/aperture/backend/internal/authn"
+	"github.com/talif/aperture/backend/internal/metrics"
 	"github.com/talif/aperture/backend/internal/obs"
 	"github.com/talif/aperture/backend/internal/tenancy"
 )
@@ -17,6 +19,9 @@ import (
 // Authenticator verifies bearer tokens and scopes the request.
 type Authenticator struct {
 	Verifier authn.Verifier
+
+	// Optional. Nil records nothing.
+	Metrics *metrics.Recorder
 }
 
 // Middleware verifies the token and attaches the principal.
@@ -29,6 +34,7 @@ func (a Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		token, ok := bearerToken(request)
 		if !ok {
+			a.recordFailure("missing")
 			writeError(writer, request, http.StatusUnauthorized, "UNAUTHENTICATED",
 				"A bearer token is required.")
 			return
@@ -39,6 +45,11 @@ func (a Authenticator) Middleware(next http.Handler) http.Handler {
 			// The reason is logged and not returned. Telling a caller whether a token
 			// failed on signature, expiry, or audience is a probing oracle, and none of
 			// those distinctions changes what a legitimate client does next.
+			// The reason is recorded here and logged, never returned. A spike in expiry
+			// is a clock problem; a spike in bad signatures is a key rotation or an
+			// attack. The caller learns neither, so this counter is the only place the
+			// distinction exists.
+			a.recordFailure(failureReason(err))
 			obs.Logger(request.Context()).Warn("token rejected", "reason", err.Error())
 			writeError(writer, request, http.StatusUnauthorized, "UNAUTHENTICATED",
 				"The token was not accepted.")
@@ -54,6 +65,38 @@ func (a Authenticator) Middleware(next http.Handler) http.Handler {
 		ctx := tenancy.WithPrincipal(request.Context(), principal)
 		next.ServeHTTP(writer, request.WithContext(ctx))
 	})
+}
+
+func (a Authenticator) recordFailure(reason string) {
+	if a.Metrics != nil {
+		a.Metrics.AuthenticationFailed(reason)
+	}
+}
+
+// failureReason maps a verification error to a bounded label value.
+//
+// A closed set, never the error text. Error strings can carry a token fragment or an
+// issuer URL, and a metric label is stored forever and read by anyone with dashboard
+// access.
+func failureReason(err error) string {
+	switch {
+	case errors.Is(err, authn.ErrExpired):
+		return "expired"
+	case errors.Is(err, authn.ErrBadSignature):
+		return "bad_signature"
+	case errors.Is(err, authn.ErrUnknownKey):
+		return "unknown_key"
+	case errors.Is(err, authn.ErrWrongIssuer):
+		return "wrong_issuer"
+	case errors.Is(err, authn.ErrWrongAudience):
+		return "wrong_audience"
+	case errors.Is(err, authn.ErrUnsupportedAlg):
+		return "unsupported_algorithm"
+	case errors.Is(err, authn.ErrMalformed):
+		return "malformed"
+	default:
+		return "other"
+	}
 }
 
 func bearerToken(request *http.Request) (string, bool) {

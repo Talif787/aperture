@@ -447,12 +447,10 @@ make api-scenarios
 Expected: 23 passes. These now run against PostgreSQL rather than memory, so the conflict,
 replay, and isolation scenarios are exercising database policies.
 
-Note that re-running is not idempotent against a persistent store: the scenarios create
-entities with fixed identifiers. If a rerun reports unexpected `replayed` statuses, reset:
-
-```bash
-make db-reset && make api-down && make api-up-postgres
-```
+The scenarios are re-runnable against a persistent store. Every operation id and entity id
+carries a per-run suffix, because idempotency is keyed by tenant and operation id: a fixed
+id returns the stored result from a previous run, and the first push reports `replayed`
+rather than `applied` for a reason that has nothing to do with the service.
 
 ### 7.7 Row-level security regression
 
@@ -516,7 +514,7 @@ make core-test-docker          && echo "7/7 swift suites"
 | Store tests report `SKIP` | `APERTURE_TEST_DATABASE_URL` unset | `make backend-test-integration` |
 | Store tests fail on `DROP SCHEMA` | Connected as a non-owner | Use the bootstrap URL, not the application one |
 | `db-verify` says tenant A sees 4 users | Connected as a superuser | The script uses `aperture_app`; confirm with `\du` |
-| `api-scenarios` reports unexpected `replayed` | A persistent store holds entities from an earlier run | `make db-reset && make api-down && make api-up-postgres` |
+| `api-scenarios` reports unexpected `replayed` | An operation id reused across runs; idempotency is keyed by tenant and operation id, not by entity | Fixed: every id now carries a per-run suffix. Otherwise `make db-reset` |
 | `make api-up` says the port is in use | An earlier service is still running | `make api-down`, which also catches hand-started processes |
 | `make: *** [api-down] Terminated` | `pkill -f` matched the shell running the recipe and killed its own parent | Fixed: `api-down` matches by process name with `pkill -x aperture` |
 | `make check` reports hundreds of Swift findings | A checker walking `.build` | Fixed; otherwise `rm -rf ios/Packages/*/.build` |

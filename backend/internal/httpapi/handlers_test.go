@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/talif/aperture/backend/internal/metrics"
 
 	"github.com/talif/aperture/backend/internal/syncapi"
 	"github.com/talif/aperture/backend/internal/tenancy"
@@ -236,5 +239,80 @@ func assertErrorCode(t *testing.T, recorder *httptest.ResponseRecorder, code str
 	}
 	if envelope.Error.Code != code {
 		t.Fatalf("expected code %q, got %q", code, envelope.Error.Code)
+	}
+}
+
+func TestPushRecordsEachOutcome(t *testing.T) {
+	registry := metrics.NewRegistry()
+	handlers := newHandlers()
+	handlers.Metrics = metrics.NewRecorder(registry)
+
+	body := []byte(`{"operations":[
+	  {"operation_id":"m-1","entity_type":"finding","entity_id":"f-m1","kind":"create",
+	   "dirty_fields":["note"],"base_version":0,"hlc":"h","payload":{"note":"a"}},
+	  {"operation_id":"m-2","entity_type":"finding","entity_id":"f-m2","kind":"nonsense",
+	   "dirty_fields":["note"],"hlc":"h"}
+	]}`)
+
+	handlers.pushDeltas(httptest.NewRecorder(), scopedRequest(http.MethodPost, "/v1/sync/deltas", body))
+
+	var builder strings.Builder
+	if err := registry.WriteTo(&builder); err != nil {
+		t.Fatalf("rendering: %v", err)
+	}
+	output := builder.String()
+
+	// Every push returns 200 whatever happened inside it, because each operation carries
+	// its own status. Without these counters a fleet whose operations all conflict looks
+	// identical on a dashboard to one where everything applies cleanly.
+	for _, expected := range []string{
+		`aperture_sync_operations_total{status="applied"} 1`,
+		`aperture_sync_operations_total{status="rejected"} 1`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("missing %s:\n%s", expected, output)
+		}
+	}
+}
+
+func TestConflictingFieldsAreCounted(t *testing.T) {
+	registry := metrics.NewRegistry()
+	handlers := newHandlers()
+	handlers.Metrics = metrics.NewRecorder(registry)
+
+	create := []byte(`{"operations":[{"operation_id":"c-1","entity_type":"finding",
+	  "entity_id":"f-c","kind":"create","dirty_fields":["measurement_value"],
+	  "base_version":0,"hlc":"h","payload":{"measurement_value":"3.4"}}]}`)
+	conflict := []byte(`{"operations":[{"operation_id":"c-2","entity_type":"finding",
+	  "entity_id":"f-c","kind":"update","dirty_fields":["measurement_value"],
+	  "base_version":0,"hlc":"h","payload":{"measurement_value":"9.9"}}]}`)
+
+	handlers.pushDeltas(httptest.NewRecorder(), scopedRequest(http.MethodPost, "/v1/sync/deltas", create))
+	handlers.pushDeltas(httptest.NewRecorder(), scopedRequest(http.MethodPost, "/v1/sync/deltas", conflict))
+
+	var builder strings.Builder
+	_ = registry.WriteTo(&builder)
+
+	// Labelled by field, which is bounded because field keys come from a template rather
+	// than from user input. A rising count on measurement_value specifically is the signal
+	// that two people are disagreeing about numbers, which is worth paging someone about
+	// in a way that a generic conflict count is not.
+	if !strings.Contains(builder.String(), `aperture_sync_conflicts_total{field="measurement_value"} 1`) {
+		t.Fatalf("conflict was not attributed to its field:\n%s", builder.String())
+	}
+}
+
+func TestHandlersWorkWithoutARecorder(t *testing.T) {
+	t.Parallel()
+
+	// Nil is a valid recorder. A test should not have to construct a registry to exercise
+	// a handler, and a service should not fail because observability is unconfigured.
+	handlers := newHandlers()
+	response := httptest.NewRecorder()
+
+	handlers.pullChanges(response, scopedRequest(http.MethodGet, "/v1/sync/changes", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
 	}
 }

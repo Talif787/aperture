@@ -26,6 +26,7 @@ import (
 	"github.com/talif/aperture/backend/internal/authn"
 	"github.com/talif/aperture/backend/internal/httpapi"
 	"github.com/talif/aperture/backend/internal/httpx"
+	"github.com/talif/aperture/backend/internal/metrics"
 	"github.com/talif/aperture/backend/internal/obs"
 	"github.com/talif/aperture/backend/internal/store"
 	"github.com/talif/aperture/backend/internal/syncapi"
@@ -72,6 +73,12 @@ type config struct {
 	// Empty selects the in-memory store, which is correct for local development and for
 	// anything that should not outlive the process.
 	databaseURL string
+
+	// A separate listener, not a route on the public one. A metrics endpoint discloses
+	// request volumes, error rates, and tenant activity patterns, which is competitive
+	// intelligence about a customer's operations even though it carries no inspection
+	// data. Empty disables it.
+	metricsAddr string
 }
 
 func loadConfig() config {
@@ -85,6 +92,7 @@ func loadConfig() config {
 		keySetTTL:            time.Hour,
 		minimumClientVersion: envOrDefault("APERTURE_MINIMUM_CLIENT_VERSION", "0.1.0"),
 		databaseURL:          envOrDefault("APERTURE_DATABASE_URL", ""),
+		metricsAddr:          envOrDefault("APERTURE_METRICS_ADDR", "127.0.0.1:9090"),
 	}
 }
 
@@ -111,6 +119,8 @@ func run(cfg config, logger *slog.Logger) error {
 
 	obs.SetDefaultLogger(logger)
 
+	recorder := metrics.NewRecorder(metrics.NewRegistry())
+
 	mux := http.NewServeMux()
 
 	// The sync endpoints mount only when a key set is configured.
@@ -122,6 +132,7 @@ func run(cfg config, logger *slog.Logger) error {
 	if cfg.jwksPath != "" {
 		keys := authn.NewFileKeySource(cfg.jwksPath, cfg.keySetTTL)
 		authenticator := httpapi.Authenticator{
+			Metrics: recorder,
 			Verifier: authn.Verifier{
 				Keys:     keys,
 				Issuer:   cfg.issuer,
@@ -154,7 +165,8 @@ func run(cfg config, logger *slog.Logger) error {
 		}
 
 		handlers := httpapi.Handlers{
-			Sync: syncapi.NewService(syncStore, time.Now),
+			Sync:    syncapi.NewService(syncStore, time.Now),
+			Metrics: recorder,
 		}
 		handlers.Register(mux, authenticator, cfg.minimumClientVersion)
 
@@ -204,9 +216,46 @@ func run(cfg config, logger *slog.Logger) error {
 	handler := httpx.Chain(mux,
 		httpx.WithRecovery(logger),
 		httpx.WithCorrelationID,
+		// Outside authentication and outside the body limit, so a rejected request is
+		// still counted. A metrics layer that only sees traffic which got past the gate
+		// cannot show you an outage at the gate.
+		httpx.WithMetrics(recorder),
 		httpx.WithAccessLog(logger),
 		httpx.WithMaxBodySize(maxRequestBytes),
 	)
+
+	// The metrics listener, bound to loopback by default.
+	//
+	// A separate server rather than a route, so the scrape endpoint cannot be reached from
+	// wherever the API is reachable. In a cluster this binds to the pod address and is
+	// reachable only by the scraper; locally it stays on loopback. Setting
+	// APERTURE_METRICS_ADDR empty turns it off.
+	if cfg.metricsAddr != "" {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", recorder.Handler())
+
+		metricsServer := &http.Server{
+			Addr:              cfg.metricsAddr,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+
+		go func() {
+			logger.Info("metrics listener started", slog.String("addr", cfg.metricsAddr))
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				// Logged, never fatal. Losing observability is bad; taking the service
+				// down because observability failed is worse, and it converts a degraded
+				// state into an outage.
+				logger.Error("metrics listener stopped", slog.String("error", err.Error()))
+			}
+		}()
+
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = metricsServer.Shutdown(shutdownCtx)
+		}()
+	}
 
 	server := &http.Server{
 		Addr:              cfg.addr,

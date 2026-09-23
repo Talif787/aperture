@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/talif/aperture/backend/internal/metrics"
 	"github.com/talif/aperture/backend/internal/obs"
 	"github.com/talif/aperture/backend/internal/syncapi"
 	"github.com/talif/aperture/backend/internal/tenancy"
@@ -21,6 +22,10 @@ const MaxRequestBytes = 8 << 20
 // Handlers serves the sync endpoints.
 type Handlers struct {
 	Sync *syncapi.Service
+
+	// Optional. Nil is valid and records nothing, so a test does not have to construct a
+	// registry to exercise a handler.
+	Metrics *metrics.Recorder
 }
 
 // Register mounts the routes on a mux.
@@ -71,6 +76,10 @@ func (h Handlers) pullChanges(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	if h.Metrics != nil {
+		h.Metrics.ChangesPulled(len(response.Changes))
+	}
+
 	writeJSON(request.Context(), writer, http.StatusOK, response)
 }
 
@@ -114,6 +123,8 @@ func (h Handlers) pushDeltas(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	h.recordOutcomes(response)
+
 	// 200 rather than 207. Every operation reports its own status in the body, and a
 	// multi-status code would make clients branch on the transport layer for something the
 	// payload already says precisely.
@@ -138,6 +149,25 @@ func (h Handlers) whoami(writer http.ResponseWriter, request *http.Request) {
 		"user_id":   principal.UserID,
 		"roles":     principal.Roles,
 	})
+}
+
+// recordOutcomes counts what the server decided, which HTTP status cannot express.
+//
+// Every push returns 200 whatever happened inside it, because each operation carries its
+// own status. Without this, a fleet whose operations are all conflicting looks identical
+// on a dashboard to one where everything applies cleanly.
+func (h Handlers) recordOutcomes(response *syncapi.PushResponse) {
+	if h.Metrics == nil {
+		return
+	}
+
+	for _, result := range response.Results {
+		h.Metrics.SyncOperationApplied(result.Status)
+
+		for _, field := range result.ConflictingFields {
+			h.Metrics.SyncConflictDetected(field)
+		}
+	}
 }
 
 func writeInternalError(writer http.ResponseWriter, request *http.Request, err error) {
