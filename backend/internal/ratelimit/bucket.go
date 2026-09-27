@@ -25,10 +25,10 @@ type Bucket struct {
 
 	// tokens is fractional. Integer tokens with a sub-second rate would round to zero and
 	// the bucket would never refill.
-	tokens   float64
-	capacity float64
+	tokens    float64
+	capacity  float64
 	perSecond float64
-	last     time.Time
+	last      time.Time
 }
 
 // NewBucket returns a bucket that starts full.

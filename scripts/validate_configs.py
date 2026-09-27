@@ -183,11 +183,18 @@ def alignment_problems(entries, path, line_number, split_outliers: bool) -> list
 
 
 def check_go_alignment() -> list[str]:
-    """Approximate gofmt's alignment of var, const, and struct field groups.
+    """Approximate gofmt's column alignment for declaration groups and literals.
 
-    Not a substitute for gofmt, which cannot run where this script runs. It exists because
-    hand-padding a column is the one formatting mistake that keeps reaching CI, and a CI
-    round trip for a column of spaces is a poor use of eight minutes.
+    Three shapes, found by scanning line by line rather than by one regex.
+    
+    An earlier version used a single pattern anchored at the group header, which had two
+    bugs that hid each other. It expected `type X struct` followed by an optional `(`, so
+    it matched no struct at all; and even once that was fixed, anchoring at the header
+    meant the run ended at the first blank line, so fields below a blank line were never
+    examined. A gofmt run found a misaligned struct the check had reported clean.
+
+    gofmt aligns each run of consecutive field or entry lines. A blank line ends a run; a
+    comment line does not.
     """
     import re
 
@@ -195,51 +202,80 @@ def check_go_alignment() -> list[str]:
     if not backend.is_dir():
         return []
 
-    problems: list[str] = []
-    group = re.compile(r'(?:var|const|type \w+ struct) \(?\n((?:\t+\w+\s+\S.*\n)+)')
+    entry = re.compile(r'^(\t+)(\w+|"[^"]*":)(\s+)(\S.*)$')
+    opens_group = re.compile(r'^(?:var|const) \($|^type \w+ struct \{$|= map\[[^\]]+\][^{]*\{$')
 
-    # Map literals align the same way and were not covered, which is how a misaligned
-    # allow-list reached CI. A checker that covers most of a rule teaches people the rule
-    # is covered.
-    map_literal = re.compile(r'= map\[[^\]]+\][^{]*\{\n((?:\t+"[^"]*":\s+\S.*\n)+)')
+    problems: list[str] = []
 
     for path in sorted(backend.rglob("*.go")):
-        text = path.read_text(encoding="utf-8")
+        lines = path.read_text(encoding="utf-8").splitlines()
 
-        # The two shapes are collected separately because only literals split on outliers.
-        candidates = [(m, False) for m in group.finditer(text)]
-        candidates += [(m, True) for m in map_literal.finditer(text)]
+        inside = False
+        is_literal = False
+        run: list[tuple[str, int, int]] = []
+        run_line = 0
 
-        for match, split_outliers in candidates:
-            # Grouped by indentation. gofmt aligns each nesting level independently, so
-            # measuring a nested map's inner keys against its outer one reports a
-            # misalignment that does not exist. The checker found exactly that on its
-            # first run, which is a fair argument for probing a new check before
-            # believing it.
+        def flush(run, run_line, is_literal):
+            if len(run) < 2:
+                return []
             by_indent: dict[int, list[tuple[str, int]]] = {}
+            for name, spaces, indent in run:
+                by_indent.setdefault(indent, []).append((name, spaces))
 
-            for line in match.group(1).splitlines():
-                parts = re.match(r'^(\t+)(\w+|"[^"]*":)(\s+)(\S.*)$', line)
-                if parts:
-                    depth = len(parts.group(1))
-                    by_indent.setdefault(depth, []).append(
-                        (parts.group(2), len(parts.group(3)))
-                    )
-
+            found = []
             for entries in by_indent.values():
-                if len(entries) < 2:
-                    continue
+                if len(entries) >= 2:
+                    found.extend(
+                        alignment_problems(entries, path, run_line, is_literal)
+                    )
+            return found
 
-                line_number = text[:match.start()].count("\n") + 1
-                problems.extend(
-                    alignment_problems(entries, path, line_number, split_outliers)
-                )
+        for number, line in enumerate(lines, 1):
+            stripped = line.strip()
+
+            if not inside:
+                if opens_group.search(stripped):
+                    inside = True
+                    is_literal = stripped.endswith("{") and "struct" not in stripped
+                    run, run_line = [], number + 1
+                continue
+
+            # A closing brace or paren at the start of a line ends the group.
+            if stripped in (")", "}", "},", "}}", "},}"):
+                problems.extend(flush(run, run_line, is_literal))
+                inside, run = False, []
+                continue
+
+            if not stripped:
+                problems.extend(flush(run, run_line, is_literal))
+                run, run_line = [], number + 1
+                continue
+
+            if stripped.startswith("//"):
+                # A standalone comment ends the run, exactly like a blank line.
+                #
+                # Established by observation rather than assumption. In
+                # httpapi/response.go, gofmt aligns the two entries above a comment to one
+                # column and the two below it to another; assuming comments were
+                # transparent produced a false positive on a file gofmt considers clean.
+                problems.extend(flush(run, run_line, is_literal))
+                run, run_line = [], number + 1
+                continue
+
+            match = entry.match(line)
+            if match:
+                if not run:
+                    run_line = number
+                run.append((match.group(2), len(match.group(3)), len(match.group(1))))
+            else:
+                problems.extend(flush(run, run_line, is_literal))
+                run, run_line = [], number + 1
+
+        problems.extend(flush(run, run_line, is_literal))
 
     if not problems:
-        print("Go alignment: var, const, and struct groups look gofmt-clean")
+        print("Go alignment: var, const, struct, and literal groups look gofmt-clean")
     return problems
-
-
 
 def check_go_lint_patterns() -> list[str]:
     """Two golangci-lint findings this project keeps producing, checked locally.
@@ -517,6 +553,72 @@ def check_go_embedded_selectors() -> list[str]:
     return problems
 
 
+
+def check_go_import_order() -> list[str]:
+    """Import paths must be sorted within each block.
+
+    gofmt sorts them, so an unsorted block is only ever an editing accident: a path
+    inserted where it looked right rather than where it belongs. `os/signal` sorts after
+    `os` and before `strconv`, which is easy to get wrong by eye and impossible to get
+    wrong by comparison.
+
+    Blocks are separated by blank lines, and each is sorted independently, which is how
+    the standard library, third party, and local groupings stay apart.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+
+    for path in sorted(backend.rglob("*.go")):
+        text = path.read_text(encoding="utf-8")
+
+        block = re.search(r'^import \(\n(.*?)^\)', text, re.MULTILINE | re.DOTALL)
+        if not block:
+            continue
+
+        first_line = text[:block.start()].count("\n") + 2
+        group: list[tuple[int, str]] = []
+
+        def check(group):
+            if len(group) < 2:
+                return []
+            paths = [value for _, value in group]
+            if paths == sorted(paths):
+                return []
+            for (number, value), expected in zip(group, sorted(paths)):
+                if value != expected:
+                    return [
+                        f"{path.relative_to(REPO_ROOT)}:{number}: import {value!r} is out "
+                        f"of order, {expected!r} sorts here. Run: make backend-fmt"
+                    ]
+            return []
+
+        for offset, line in enumerate(block.group(1).splitlines()):
+            stripped = line.strip()
+
+            if not stripped:
+                problems.extend(check(group))
+                group = []
+                continue
+
+            match = re.match(r'^(?:[\w.]+ )?"([^"]+)"$', stripped)
+            if match:
+                group.append((first_line + offset, match.group(1)))
+            else:
+                problems.extend(check(group))
+                group = []
+
+        problems.extend(check(group))
+
+    if not problems:
+        print("Go import order: every block is sorted")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -554,6 +656,7 @@ def main() -> int:
     failures.extend(check_go_standard_methods())
     failures.extend(check_go_comment_alignment())
     failures.extend(check_go_embedded_selectors())
+    failures.extend(check_go_import_order())
 
     if failures:
         print("\nConfiguration errors:")
