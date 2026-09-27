@@ -384,6 +384,74 @@ def check_go_standard_methods() -> list[str]:
     return problems
 
 
+
+def check_go_comment_alignment() -> list[str]:
+    """gofmt aligns consecutive end-of-line comments within a run.
+
+    Measured in runes, not bytes. A line containing non-ASCII text occupies fewer columns
+    than it does bytes, and a byte-based check reports the one case most likely to be
+    wrong as correct. That case is exactly what reached CI: three Arabic-Indic digits in
+    six bytes.
+
+    A run ends at a line with no trailing comment, or at a change of indentation.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+    # Code, then whitespace, then a line comment. Not a line that is only a comment.
+    trailing = re.compile(r'^(\t*)(\S.*?)(\s+)(//.*)$')
+
+    for path in sorted(backend.rglob("*.go")):
+        text = path.read_text(encoding="utf-8")
+        run: list[tuple[int, int, int, int]] = []
+
+        def flush(run):
+            if len(run) < 2:
+                return []
+            width = max(code for _, code, _, _ in run)
+            found = []
+            for number, code, spaces, _ in run:
+                wanted = width + 1 - code
+                if spaces != wanted:
+                    # Reported as padding rather than as a column. A tab counts as one
+                    # character here and as eight in an editor, so any absolute column
+                    # number would disagree with whatever the reader is looking at.
+                    found.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number}: trailing comment has "
+                        f"{spaces} space(s) before it, gofmt wants {wanted}. "
+                        f"Run: make backend-fmt"
+                    )
+            return found
+
+        for number, line in enumerate(text.splitlines(), 1):
+            match = trailing.match(line)
+
+            if not match:
+                problems.extend(flush(run))
+                run = []
+                continue
+
+            indent = len(match.group(1))
+            code = indent + len(match.group(2))
+            spaces = len(match.group(3))
+
+            if run and run[-1][3] != indent:
+                problems.extend(flush(run))
+                run = []
+
+            run.append((number, code, spaces, indent))
+
+        problems.extend(flush(run))
+
+    if not problems:
+        print("Go comment alignment: trailing comments look gofmt-clean")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -419,6 +487,7 @@ def main() -> int:
     failures.extend(check_go_lint_patterns())
     failures.extend(check_go_module_freshness())
     failures.extend(check_go_standard_methods())
+    failures.extend(check_go_comment_alignment())
 
     if failures:
         print("\nConfiguration errors:")

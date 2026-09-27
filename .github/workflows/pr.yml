@@ -125,6 +125,26 @@ jobs:
           APERTURE_TEST_DATABASE_URL: postgres://aperture:local-development-only@localhost:5432/aperture?sslmode=disable
         run: go test -race -count=1 ./...
 
+      # The seed corpus runs on every pull request; it is fast and it is where a committed
+      # reproducer becomes a permanent regression test. Actual fuzzing is a separate,
+      # longer job, because a ten-second budget per target finds little and a ten-minute
+      # one does not belong in a gate people wait on.
+      - name: Fuzz seed corpus
+        working-directory: backend
+        run: go test -run '^Fuzz' ./...
+
+      # A ratchet, not a target. The recorded baseline is what the suite actually covered
+      # when it was committed; the gate refuses a decrease and a short list of minimums
+      # guards the packages where thin tests are a security problem. Invented percentages
+      # were tried first and four of eight failed on their first real run.
+      - name: Coverage
+        working-directory: backend
+        env:
+          APERTURE_TEST_DATABASE_URL: postgres://aperture:local-development-only@localhost:5432/aperture?sslmode=disable
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./... > /dev/null
+          cd .. && python3 scripts/check_coverage.py
+
       - name: Lint
         # Action v8 requires golangci-lint v2.1.0 or newer. The two schemas are not
         # interchangeable: the v2 binary does not contain the v1 config parser, and v6 of

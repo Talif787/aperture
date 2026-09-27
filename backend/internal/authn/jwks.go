@@ -151,6 +151,13 @@ func parseKeySet(set *JSONWebKeySet) (map[string]crypto.PublicKey, error) {
 			continue
 		}
 
+		// An unusable entry is skipped rather than failing the whole set.
+		//
+		// A provider publishing one malformed key alongside several good ones must not take
+		// authentication down for a tenant. The cost is that the bad entry is invisible:
+		// tokens signed by it fail with ErrUnknownKey, which sends an operator looking at
+		// the token rather than at the key set. That is the right trade at this scale and
+		// the wrong one at larger scale, where these should be counted and reported.
 		switch entry.KeyType {
 		case "RSA":
 			key, err := parseRSAKey(entry)
@@ -176,16 +183,49 @@ func parseKeySet(set *JSONWebKeySet) (map[string]crypto.PublicKey, error) {
 func parseRSAKey(entry JSONWebKey) (*rsa.PublicKey, error) {
 	modulus, err := base64.RawURLEncoding.DecodeString(entry.Modulus)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authn: decoding modulus for key %q: %w", entry.KeyID, err)
 	}
 	exponent, err := base64.RawURLEncoding.DecodeString(entry.Exponent)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authn: decoding exponent for key %q: %w", entry.KeyID, err)
+	}
+
+	// Decoding an empty string succeeds and yields zero bytes, so a JWKS entry with an
+	// empty `n` produced a key with a zero modulus and no error at all. Every signature
+	// checked against it would fail, and the symptom would be an entire tenant unable to
+	// authenticate with nothing in the logs pointing at the key material.
+	//
+	// Found by a test that asserted this was rejected before the code did anything of the
+	// kind.
+	if len(modulus) == 0 {
+		return nil, fmt.Errorf("authn: key %q has an empty modulus: %w", entry.KeyID, ErrKeySetEmpty)
+	}
+	if len(exponent) == 0 {
+		return nil, fmt.Errorf("authn: key %q has an empty exponent: %w", entry.KeyID, ErrKeySetEmpty)
+	}
+
+	// A modulus this small cannot carry a real key; anything under 2048 bits is below what
+	// this service will accept from a provider, and a handful of bytes is a typo or a
+	// truncated document rather than a weak key.
+	const minimumModulusBytes = 256
+	if len(modulus) < minimumModulusBytes {
+		return nil, fmt.Errorf(
+			"authn: key %q has a %d byte modulus, below the %d byte minimum: %w",
+			entry.KeyID, len(modulus), minimumModulusBytes, ErrKeySetEmpty,
+		)
 	}
 
 	value := 0
 	for _, b := range exponent {
 		value = value<<8 | int(b)
+	}
+
+	// The exponent must be odd and greater than one. Zero, one, or an even value cannot be
+	// coprime with the totient, so no such key exists; accepting one would mean trusting a
+	// signature check that can never pass.
+	if value <= 1 || value%2 == 0 {
+		return nil, fmt.Errorf("authn: key %q has an invalid exponent %d: %w",
+			entry.KeyID, value, ErrKeySetEmpty)
 	}
 
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(modulus), E: value}, nil
@@ -198,16 +238,29 @@ func parseECKey(entry JSONWebKey) (*ecdsa.PublicKey, error) {
 
 	x, err := base64.RawURLEncoding.DecodeString(entry.X)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authn: decoding x for key %q: %w", entry.KeyID, err)
 	}
 	y, err := base64.RawURLEncoding.DecodeString(entry.Y)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("authn: decoding y for key %q: %w", entry.KeyID, err)
 	}
 
-	return &ecdsa.PublicKey{
+	// Same hole as the RSA path: empty coordinates decode successfully into zero.
+	if len(x) == 0 || len(y) == 0 {
+		return nil, fmt.Errorf("authn: key %q has empty coordinates: %w", entry.KeyID, ErrKeySetEmpty)
+	}
+
+	key := &ecdsa.PublicKey{
 		Curve: elliptic.P256(),
 		X:     new(big.Int).SetBytes(x),
 		Y:     new(big.Int).SetBytes(y),
-	}, nil
+	}
+
+	// A point that is not on the curve is not a public key. Accepting one is how invalid
+	// curve attacks start, and the standard library will check it here for free.
+	if !key.Curve.IsOnCurve(key.X, key.Y) {
+		return nil, fmt.Errorf("authn: key %q is not a point on P-256: %w", entry.KeyID, ErrKeySetEmpty)
+	}
+
+	return key, nil
 }

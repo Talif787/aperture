@@ -196,6 +196,73 @@ backend-deps-check: ## Fail with an instruction when dependencies are missing or
 		exit 1; \
 	fi
 
+# Per-target fuzz budget. Short by default so it fits in a normal test run; CI uses the
+# same value, and a long soak is a separate, deliberate command.
+FUZZ_TIME ?= 10s
+
+.PHONY: fuzz
+fuzz: backend-deps-check ## Run every fuzz target briefly (FUZZ_TIME=30s to extend)
+	@cd backend && for target in $$(grep -rho '^func \(Fuzz[A-Za-z]*\)' --include='*_test.go' . | sed 's/^func //'); do \
+		pkg=$$(grep -rl "func $$target(" --include='*_test.go' . | head -1 | xargs dirname); \
+		echo "==> $$target in $$pkg"; \
+		GOTOOLCHAIN=local go test "$$pkg" -run '^$$' -fuzz "^$$target$$" -fuzztime=$(FUZZ_TIME) || exit 1; \
+	done
+	@echo "fuzzing complete"
+
+.PHONY: fuzz-one
+fuzz-one: backend-deps-check ## Fuzz a single target: make fuzz-one TARGET=FuzzVerify [FUZZ_TIME=60s]
+	@if [ -z "$(TARGET)" ]; then \
+		echo "TARGET is required. Available targets:"; \
+		grep -rho '^func \(Fuzz[A-Za-z]*\)' --include='*_test.go' backend | sed 's/^func /  /'; \
+		exit 1; \
+	fi
+	@cd backend && pkg=$$(grep -rl "func $(TARGET)(" --include='*_test.go' . | head -1 | xargs dirname); \
+		if [ -z "$$pkg" ]; then echo "no such target: $(TARGET)"; exit 1; fi; \
+		echo "==> $(TARGET) in $$pkg for $(FUZZ_TIME)"; \
+		GOTOOLCHAIN=local go test "$$pkg" -run '^$$' -fuzz "^$(TARGET)$$" -fuzztime=$(FUZZ_TIME)
+
+.PHONY: fuzz-targets
+fuzz-targets: ## List every fuzz target and its package
+	@grep -rn '^func Fuzz[A-Za-z]*(' --include='*_test.go' backend \
+		| sed 's|backend/internal/||; s|/fuzz_test.go:[0-9]*:func |  |; s|(f \*testing.F) {||' \
+		| awk '{printf "  %-12s %s\n", $$1, $$2}'
+
+.PHONY: fuzz-soak
+fuzz-soak: ## Run every fuzz target for five minutes each
+	@$(MAKE) fuzz FUZZ_TIME=5m
+
+.PHONY: fuzz-corpus
+fuzz-corpus: ## Show any inputs the fuzzer has recorded as failures
+	@find backend -path '*/testdata/fuzz/*' -type f 2>/dev/null | sed 's/^/  /' || true
+	@echo "(a file here is a reproducer; it is committed and becomes a regression test)"
+
+.PHONY: coverage
+coverage: backend-deps-check ## Measure coverage and enforce the per-package floors
+	@# The database URL is set here for the same reason backend-test-integration sets it:
+	@# without it the store tests skip, and the package reports zero coverage for tests that
+	@# exist and pass. A gate that fails because of its own configuration teaches people to
+	@# pass -k to it.
+	@cd backend && APERTURE_TEST_DATABASE_URL="postgres://aperture:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable" \
+		GOTOOLCHAIN=local go test -coverprofile=coverage.out -covermode=atomic ./... >/dev/null
+	@python3 scripts/check_coverage.py
+
+.PHONY: coverage-baseline
+coverage-baseline: backend-deps-check ## Record current coverage as the floor the gate ratchets from
+	@cd backend && APERTURE_TEST_DATABASE_URL="postgres://aperture:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable" \
+		GOTOOLCHAIN=local go test -coverprofile=coverage.out -covermode=atomic ./... >/dev/null
+	@python3 scripts/check_coverage.py --write-baseline
+
+.PHONY: coverage-report
+coverage-report: backend-deps-check ## Show coverage per package without enforcing anything
+	@cd backend && APERTURE_TEST_DATABASE_URL="postgres://aperture:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable" \
+		GOTOOLCHAIN=local go test -coverprofile=coverage.out -covermode=atomic ./... >/dev/null
+	@python3 scripts/check_coverage.py --report
+
+.PHONY: coverage-html
+coverage-html: coverage ## Write an annotated coverage report
+	@cd backend && go tool cover -html=coverage.out -o coverage.html
+	@echo "wrote backend/coverage.html"
+
 .PHONY: backend-vet
 backend-vet: backend-deps-check ## Run the full go vet, which go test only partly covers
 	@cd backend && GOTOOLCHAIN=local go vet ./...

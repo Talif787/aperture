@@ -54,3 +54,4 @@ __pycache__/
 # The key signs tokens the local service accepts, so it is a credential even though it is
 # only local, and it must never reach the repository.
 .dev/
+backend/coverage.html

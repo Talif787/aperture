@@ -1,0 +1,59 @@
+# Nightly fuzzing.
+#
+# Separate from the pull request gate on purpose. A budget short enough for a gate people
+# wait on finds almost nothing; a budget long enough to find something is far too long to
+# block a merge. The seed corpus runs in the gate, the search runs here.
+name: fuzz
+
+on:
+  schedule:
+    # 04:00 UTC, which is outside working hours in every timezone this is developed in.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Budget per target'
+        required: false
+        default: '5m'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: backend/go.sum
+
+      - name: Fuzz every target
+        working-directory: backend
+        env:
+          DURATION: ${{ inputs.duration || '5m' }}
+        run: |
+          set -o pipefail
+          status=0
+          for target in $(grep -rho '^func \(Fuzz[A-Za-z]*\)' --include='*_test.go' . | sed 's/^func //'); do
+            package=$(grep -rl "func ${target}(" --include='*_test.go' . | head -1 | xargs dirname)
+            echo "==> ${target} in ${package}"
+            go test "${package}" -run '^$' -fuzz "^${target}$" -fuzztime="${DURATION}" || status=1
+          done
+          exit ${status}
+
+      # A crash produces a reproducer under testdata/fuzz. It is uploaded rather than
+      # discarded, because the input is the entire value of the run: without it the failure
+      # is a log line nobody can act on.
+      - name: Upload reproducers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-reproducers
+          path: backend/**/testdata/fuzz/**
+          if-no-files-found: ignore

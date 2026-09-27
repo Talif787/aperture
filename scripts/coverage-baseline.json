@@ -1,0 +1,10 @@
+{
+  "internal/authn": 84.0,
+  "internal/httpapi": 55.5,
+  "internal/httpx": 84.8,
+  "internal/metrics": 76.9,
+  "internal/obs": 92.3,
+  "internal/store": 78.6,
+  "internal/syncapi": 88.7,
+  "internal/tenancy": 96.7
+}
