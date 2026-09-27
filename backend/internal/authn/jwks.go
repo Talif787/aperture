@@ -258,7 +258,7 @@ func parseECKey(entry JSONWebKey) (*ecdsa.PublicKey, error) {
 
 	// A point that is not on the curve is not a public key. Accepting one is how invalid
 	// curve attacks start, and the standard library will check it here for free.
-	if !key.Curve.IsOnCurve(key.X, key.Y) {
+	if !key.IsOnCurve(key.X, key.Y) {
 		return nil, fmt.Errorf("authn: key %q is not a point on P-256: %w", entry.KeyID, ErrKeySetEmpty)
 	}
 

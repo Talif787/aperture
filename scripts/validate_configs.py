@@ -452,6 +452,51 @@ def check_go_comment_alignment() -> list[str]:
     return problems
 
 
+
+# Embedded fields whose promoted members this codebase reaches through by name.
+#
+# Deliberately a short, known list rather than a general rule. Detecting embedding properly
+# needs type information, which this script does not have; these two come from the standard
+# library's crypto types and are the ones that actually appear here. A check that pretends
+# to cover more than it does is worse than one that says what it covers.
+PROMOTED_SELECTORS = {
+    # rsa.PrivateKey embeds rsa.PublicKey, so key.PublicKey.N is key.N.
+    r'\.PublicKey\.\w': "rsa.PrivateKey embeds PublicKey; select the field directly",
+    # ecdsa.PublicKey embeds elliptic.Curve, so key.Curve.IsOnCurve is key.IsOnCurve.
+    r'\.Curve\.\w': "ecdsa.PublicKey embeds Curve; call the method directly",
+}
+
+
+def check_go_embedded_selectors() -> list[str]:
+    """Flag a selector that goes through an embedded field Go already promotes.
+
+    staticcheck reports these as QF1008. Harmless at runtime, but the longer form implies
+    the field is a plain member, and a reader then looks for a definition that is not there.
+    """
+    import re
+
+    backend = REPO_ROOT / "backend"
+    if not backend.is_dir():
+        return []
+
+    problems: list[str] = []
+
+    for path in sorted(backend.rglob("*.go")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("//"):
+                continue
+
+            for pattern, reason in PROMOTED_SELECTORS.items():
+                if re.search(pattern, line):
+                    problems.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number}: {reason} (QF1008)"
+                    )
+
+    if not problems:
+        print("Go embedded selectors: none reached through by name")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -488,6 +533,7 @@ def main() -> int:
     failures.extend(check_go_module_freshness())
     failures.extend(check_go_standard_methods())
     failures.extend(check_go_comment_alignment())
+    failures.extend(check_go_embedded_selectors())
 
     if failures:
         print("\nConfiguration errors:")

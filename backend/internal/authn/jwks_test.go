@@ -72,7 +72,7 @@ func TestKeyByIDReturnsAMatchingKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("KeyByID failed: %v", err)
 	}
-	if found.(*rsa.PublicKey).N.Cmp(key.PublicKey.N) != 0 {
+	if found.(*rsa.PublicKey).N.Cmp(key.N) != 0 {
 		t.Fatal("returned a different key than the set contained")
 	}
 }
