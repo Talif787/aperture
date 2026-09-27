@@ -1,0 +1,159 @@
+# Renders the app in a simulator and publishes screenshots as artifacts.
+#
+# This exists because of a hardware constraint rather than a preference. Development
+# happens in Cloud Shell, and the available Mac is a 2017 model capped at macOS 13, which
+# cannot run the Xcode this project needs. Without this job there is no way to look at the
+# interface at all: `ios.yml` proves the app compiles, which is a different question from
+# whether a screen is laid out correctly.
+#
+# Screenshots are not assertions. Nothing here fails when a view looks wrong, because
+# nothing here knows what right looks like. Comparing against committed reference images
+# would turn this into a real test, and is the obvious next step once there are screens
+# worth guarding.
+name: ui-screenshots
+
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ui-screenshots.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Capture
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest installed Xcode
+        run: |
+          set -euo pipefail
+          newest="$(ls -1d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "${newest}/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      # Chosen at runtime rather than named. Device names and runtime versions change
+      # between Xcode releases, and a hardcoded "iPhone 15" is a job that breaks on an
+      # image update for no reason anyone will remember.
+      - name: Choose a simulator
+        id: simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available
+
+          line="$(xcrun simctl list devices available | grep 'iPhone' | head -1)"
+          if [ -z "${line}" ]; then
+            echo "no available iPhone simulator on this runner"
+            exit 1
+          fi
+
+          udid="$(echo "${line}" | grep -oE '[0-9A-Fa-f-]{36}')"
+          name="$(echo "${line}" | sed 's/ (.*//' | xargs)"
+
+          echo "udid=${udid}" >> "$GITHUB_OUTPUT"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "Using ${name} (${udid})"
+
+      - name: Build for the simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Aperture.xcodeproj \
+            -scheme Aperture \
+            -configuration Debug \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify || xcodebuild build \
+            -project Aperture.xcodeproj \
+            -scheme Aperture \
+            -configuration Debug \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Boot, install, and launch
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          udid="${{ steps.simulator.outputs.udid }}"
+
+          app="$(find build/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' | head -1)"
+          if [ -z "${app}" ]; then
+            echo "no .app was produced; the build step succeeded but emitted nothing"
+            find build/Build/Products -maxdepth 2 | head -40
+            exit 1
+          fi
+          echo "installing ${app}"
+
+          xcrun simctl boot "${udid}" || true
+          xcrun simctl bootstatus "${udid}" -b
+
+          xcrun simctl install "${udid}" "${app}"
+
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Info.plist")"
+          echo "bundle id ${bundle_id}"
+          echo "BUNDLE_ID=${bundle_id}" >> "$GITHUB_ENV"
+
+          xcrun simctl launch "${udid}" "${bundle_id}"
+
+          # The launch call returns as soon as the process exists, not when the first frame
+          # is drawn. Screenshotting immediately captures a white window.
+          sleep 8
+
+      - name: Capture light and dark
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          udid="${{ steps.simulator.outputs.udid }}"
+          mkdir -p screenshots
+
+          xcrun simctl ui "${udid}" appearance light
+          sleep 2
+          xcrun simctl io "${udid}" screenshot screenshots/root-light.png
+
+          xcrun simctl ui "${udid}" appearance dark
+          sleep 2
+          xcrun simctl io "${udid}" screenshot screenshots/root-dark.png
+
+          # Larger text is where a layout built at the default size falls apart, and this
+          # product is used outdoors in gloves by people who may well have it turned up.
+          xcrun simctl ui "${udid}" appearance light
+          xcrun simctl ui "${udid}" content_size accessibility-extra-large || true
+          sleep 3
+          xcrun simctl io "${udid}" screenshot screenshots/root-large-text.png || true
+
+          ls -la screenshots
+
+      - name: Device log, in case a screen is blank
+        if: always()
+        working-directory: ios
+        run: |
+          xcrun simctl spawn "${{ steps.simulator.outputs.udid }}" log show \
+            --last 2m --predicate 'processImagePath CONTAINS "Aperture"' --style compact \
+            | tail -60 || echo "no log available"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ github.sha }}
+          path: ios/screenshots/*.png
+          if-no-files-found: warn

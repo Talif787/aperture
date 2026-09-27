@@ -17,7 +17,9 @@ let package = Package(
     platforms: [
         // String form rather than .v26: the enum case exists only in newer SwiftPM
         // versions, and this manifest must also parse under the Linux toolchain.
-        .iOS("26.0"),
+        // iOS 18.0 is the floor set by Synchronization.Mutex, and the ceiling set by the
+        // test device: an iPhone XR is an A12 and cannot run iOS 26.
+        .iOS("18.0"),
         .macOS("15.0")
     ],
     products: [

@@ -619,6 +619,73 @@ def check_go_import_order() -> list[str]:
     return problems
 
 
+
+def check_workflow_shell() -> list[str]:
+    """Every `run:` block in a workflow must be valid shell.
+
+    A syntax error in a workflow script is only discovered when the job runs, which for a
+    release or screenshot workflow can be days after the change that broke it. `bash -n`
+    parses without executing, so the check costs nothing and catches the whole class.
+
+    GitHub expressions are substituted before the shell sees them, so they are replaced
+    with a placeholder rather than left to confuse the parser.
+    """
+    import re
+    import subprocess
+    import tempfile
+
+    workflows = REPO_ROOT / ".github" / "workflows"
+    if not workflows.is_dir():
+        return []
+
+    try:
+        import yaml
+    except ImportError:
+        print("Workflow shell: skipped, PyYAML not installed")
+        return []
+
+    expression = re.compile(r'\$\{\{[^}]*\}\}')
+    problems: list[str] = []
+
+    for path in sorted(workflows.glob("*.yml")):
+        try:
+            spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as error:
+            problems.append(f"{path.relative_to(REPO_ROOT)}: not valid YAML: {error}")
+            continue
+
+        if not isinstance(spec, dict):
+            continue
+
+        for job_name, job in (spec.get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                script = step.get("run")
+                if not isinstance(script, str):
+                    continue
+
+                cleaned = expression.sub("PLACEHOLDER", script)
+
+                with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as handle:
+                    handle.write(cleaned)
+                    temporary = handle.name
+
+                result = subprocess.run(
+                    ["bash", "-n", temporary], capture_output=True, text=True, check=False
+                )
+
+                if result.returncode != 0:
+                    label = step.get("name", "<unnamed step>")
+                    detail = result.stderr.strip().splitlines()
+                    problems.append(
+                        f"{path.relative_to(REPO_ROOT)}: job {job_name}, step {label!r}: "
+                        f"{detail[-1] if detail else 'shell syntax error'}"
+                    )
+
+    if not problems:
+        print("Workflow shell: every run block parses")
+    return problems
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -657,6 +724,7 @@ def main() -> int:
     failures.extend(check_go_comment_alignment())
     failures.extend(check_go_embedded_selectors())
     failures.extend(check_go_import_order())
+    failures.extend(check_workflow_shell())
 
     if failures:
         print("\nConfiguration errors:")

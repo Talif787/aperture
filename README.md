@@ -60,11 +60,40 @@ connection would pass every isolation test against policies never consulted.
 | Prometheus metrics with enforced label cardinality | Complete | `make metrics-scenarios`, 17 assertions |
 | Per-tenant rate limiting with bounded memory | Complete | `make ratelimit-scenarios`, 14 assertions |
 | Domain, sync engine, and convergence proofs (Swift, Linux-buildable) | Complete | `make core-test-docker`, ~200 tests |
-| Capture pipeline, SwiftUI views | **Not built** | Needs macOS and a device |
-| Push notifications, background refresh | **Not built** | Needs APNs credentials |
+| Capture pipeline, SwiftUI views | **Compile-verified only** | `ios` CI job. See the note below |
+| Push notifications, background refresh | **Not built** | Needs a paid Apple account for APNs |
 | Terraform, Cloud SQL, deployment | **Not built** | Deferred until it would cost money |
 
 131 Go tests, 12 benchmarks, 8 fuzz targets, roughly 200 Swift tests across 76 files.
+
+### The iOS client is compile-verified, not device-verified
+
+This is worth stating plainly rather than leaving a reader to infer it.
+
+The Swift compiles on a real Xcode against real Apple SDKs, and its logic is tested: the
+capture state machine, the durable-write ordering, and the sync engine all have suites that
+run on every push. What has **never happened** is the app running on a phone.
+
+The available Mac is a 2017 model, capped at macOS 13, which cannot run the Xcode this
+project's Swift 6 language mode requires. There is no upgrade path for that hardware. CI on
+a macOS runner is therefore the only compiler this code has ever met.
+
+What that leaves unverified is specific and worth naming:
+
+- No frame has been acquired by `CameraCaptureSession`. Session interruption ordering,
+  configuration cost, and preview behaviour under load are all untested.
+- No SwiftUI view has been rendered on a device. Layout, contrast in sunlight, and whether
+  the shutter is reachable one-handed are unknown.
+- Thermal degradation is implemented against `ProcessInfo.thermalState` and has never been
+  triggered by an actual warm phone.
+- The available test device is an iPhone XR, which has no LiDAR. Depth capture and
+  `RoomPlan` are therefore out of scope entirely rather than merely untested, and the
+  product scope is photo evidence with manually entered measurements. The domain already
+  treats measurements as requiring human decision and never merges them automatically, so
+  this narrows the product without contradicting its design.
+
+`ui-screenshots.yml` boots a simulator and publishes light, dark, and large-text captures
+as artifacts, which is the closest this setup gets to looking at the interface.
 
 ---
 
