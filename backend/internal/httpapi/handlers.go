@@ -29,12 +29,29 @@ type Handlers struct {
 }
 
 // Register mounts the routes on a mux.
-func (h Handlers) Register(mux *http.ServeMux, authenticator Authenticator, minimumClient string) {
+// Register mounts the sync endpoints.
+//
+// afterAuth runs inside authentication, for anything that needs a verified tenant. Nil
+// means nothing is inserted, which keeps every test that does not care about rate limiting
+// free of the concept.
+func (h Handlers) Register(
+	mux *http.ServeMux,
+	authenticator Authenticator,
+	minimumClient string,
+	afterAuth func(http.Handler) http.Handler,
+) {
 	protected := func(handler http.HandlerFunc) http.Handler {
-		// Order matters. The version gate runs before authentication so an unsupported
-		// client gets a specific, actionable answer rather than a token error that sends
-		// the user to reinstall the app.
-		return MinimumClientVersion(minimumClient)(authenticator.Middleware(handler))
+		var inner http.Handler = handler
+		if afterAuth != nil {
+			inner = afterAuth(inner)
+		}
+
+		// Order matters, and it is the whole reason this takes a parameter rather than
+		// wrapping the mux. The version gate runs first so an unsupported client gets a
+		// specific answer rather than a token error that sends the user to reinstall.
+		// Authentication runs next, because the rate limiter keys on the verified tenant
+		// and there is no tenant before the token is checked.
+		return MinimumClientVersion(minimumClient)(authenticator.Middleware(inner))
 	}
 
 	mux.Handle("GET /v1/sync/changes", protected(h.pullChanges))

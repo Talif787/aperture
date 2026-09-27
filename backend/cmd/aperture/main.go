@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/talif/aperture/backend/internal/httpx"
 	"github.com/talif/aperture/backend/internal/metrics"
 	"github.com/talif/aperture/backend/internal/obs"
+	"github.com/talif/aperture/backend/internal/ratelimit"
 	"github.com/talif/aperture/backend/internal/store"
 	"github.com/talif/aperture/backend/internal/syncapi"
 )
@@ -74,6 +76,12 @@ type config struct {
 	// anything that should not outlive the process.
 	databaseURL string
 
+	// Requests per second per tenant, and the burst that absorbs a reconnecting fleet.
+	// Zero disables the limiter entirely, which is the right default for local
+	// development and the wrong one anywhere a real fleet can reach.
+	rateLimitPerSecond float64
+	rateLimitBurst     int
+
 	// A separate listener, not a route on the public one. A metrics endpoint discloses
 	// request volumes, error rates, and tenant activity patterns, which is competitive
 	// intelligence about a customer's operations even though it carries no inspection
@@ -93,7 +101,41 @@ func loadConfig() config {
 		minimumClientVersion: envOrDefault("APERTURE_MINIMUM_CLIENT_VERSION", "0.1.0"),
 		databaseURL:          envOrDefault("APERTURE_DATABASE_URL", ""),
 		metricsAddr:          envOrDefault("APERTURE_METRICS_ADDR", "127.0.0.1:9090"),
+		rateLimitPerSecond:   envFloatOrDefault("APERTURE_RATE_LIMIT_PER_SECOND", 0),
+		rateLimitBurst:       envIntOrDefault("APERTURE_RATE_LIMIT_BURST", 60),
 	}
+}
+
+// envFloatOrDefault reads a float, falling back rather than failing.
+//
+// A malformed value falls back and is logged at startup rather than refusing to boot. The
+// alternative sounds stricter but means a typo in a deployment variable takes the service
+// down, and the safe default here is "no limiting", which is the behaviour before this
+// phase existed.
+func envFloatOrDefault(key string, fallback float64) float64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
 }
 
 func envOrDefault(key, fallback string) string {
@@ -131,6 +173,23 @@ func run(cfg config, logger *slog.Logger) error {
 	// and answers every request.
 	if cfg.jwksPath != "" {
 		keys := authn.NewFileKeySource(cfg.jwksPath, cfg.keySetTTL)
+		// Inside authentication, because the key is the tenant from the verified token.
+		// Zero means no limiter at all rather than a limiter that allows nothing, which
+		// is a distinction worth being explicit about: the second would be an outage
+		// caused by a default.
+		var limiter *ratelimit.Limiter
+		if cfg.rateLimitPerSecond > 0 {
+			limiter = ratelimit.New(ratelimit.Config{
+				PerSecond: cfg.rateLimitPerSecond,
+				Burst:     cfg.rateLimitBurst,
+			})
+			logger.Info("rate limiting enabled",
+				slog.Float64("per_second", cfg.rateLimitPerSecond),
+				slog.Int("burst", cfg.rateLimitBurst))
+		} else {
+			logger.Warn("rate limiting disabled: set APERTURE_RATE_LIMIT_PER_SECOND to enable")
+		}
+
 		authenticator := httpapi.Authenticator{
 			Metrics: recorder,
 			Verifier: authn.Verifier{
@@ -168,7 +227,12 @@ func run(cfg config, logger *slog.Logger) error {
 			Sync:    syncapi.NewService(syncStore, time.Now),
 			Metrics: recorder,
 		}
-		handlers.Register(mux, authenticator, cfg.minimumClientVersion)
+		var afterAuth func(http.Handler) http.Handler
+		if limiter != nil {
+			afterAuth = httpx.WithRateLimit(limiter, recorder)
+		}
+
+		handlers.Register(mux, authenticator, cfg.minimumClientVersion, afterAuth)
 
 		logger.Info("sync endpoints mounted",
 			slog.String("jwks_path", cfg.jwksPath),

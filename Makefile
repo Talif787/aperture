@@ -236,6 +236,33 @@ fuzz-corpus: ## Show any inputs the fuzzer has recorded as failures
 	@find backend -path '*/testdata/fuzz/*' -type f 2>/dev/null | sed 's/^/  /' || true
 	@echo "(a file here is a reproducer; it is committed and becomes a regression test)"
 
+# Benchmark duration. Short by default; a comparison run wants longer and -count.
+BENCH_TIME ?= 1s
+BENCH_COUNT ?= 1
+
+.PHONY: bench
+bench: backend-deps-check ## Run every benchmark
+	@cd backend && GOTOOLCHAIN=local go test -run '^$$' -bench . -benchmem \
+		-benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) ./...
+
+.PHONY: bench-save
+bench-save: backend-deps-check ## Record a benchmark baseline for comparison
+	@mkdir -p .dev
+	@cd backend && GOTOOLCHAIN=local go test -run '^$$' -bench . -benchmem \
+		-benchtime=$(BENCH_TIME) -count=$(or $(BENCH_COUNT),6) ./... > $(CURDIR)/.dev/bench-base.txt
+	@echo "wrote .dev/bench-base.txt"
+	@echo "after a change: make bench-save BENCH_OUT=.dev/bench-new.txt, then diff them"
+
+.PHONY: bench-one
+bench-one: backend-deps-check ## Run one benchmark: make bench-one NAME=BenchmarkPushApply
+	@if [ -z "$(NAME)" ]; then \
+		echo "NAME is required. Available benchmarks:"; \
+		grep -rho '^func \(Benchmark[A-Za-z]*\)' --include='*_test.go' backend | sed 's/^func /  /'; \
+		exit 1; \
+	fi
+	@cd backend && GOTOOLCHAIN=local go test -run '^$$' -bench "^$(NAME)$$" -benchmem \
+		-benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) ./...
+
 .PHONY: coverage
 coverage: backend-deps-check ## Measure coverage and enforce the per-package floors
 	@# The database URL is set here for the same reason backend-test-integration sets it:
@@ -319,6 +346,11 @@ DEV_DIR := $(CURDIR)/.dev
 LOCAL_DATABASE_URL := postgres://aperture_app:local-development-only@localhost:$(or $(POSTGRES_PORT),5432)/aperture?sslmode=disable
 DATABASE_URL ?=
 
+# Rate limiting is off unless asked for. Zero means no limiter at all, which is different
+# from a limiter that allows nothing: the second would be an outage caused by a default.
+RATE_LIMIT_PER_SECOND ?= 0
+RATE_LIMIT_BURST ?= 60
+
 .PHONY: api-build
 api-build: ## Build the service and the development token tool
 	@mkdir -p $(DEV_DIR)
@@ -347,6 +379,8 @@ api-up: api-keygen ## Start the service. Add DATABASE_URL=... to use Postgres in
 		APERTURE_ENVIRONMENT=local \
 		APERTURE_LOG_LEVEL=debug \
 		APERTURE_DATABASE_URL="$(DATABASE_URL)" \
+		APERTURE_RATE_LIMIT_PER_SECOND="$(RATE_LIMIT_PER_SECOND)" \
+		APERTURE_RATE_LIMIT_BURST="$(RATE_LIMIT_BURST)" \
 		nohup $(DEV_DIR)/aperture > $(DEV_DIR)/aperture.log 2>&1 & echo $$! > $(DEV_DIR)/aperture.pid
 	@for i in $$(seq 1 30); do \
 		curl -sf http://localhost:8080/healthz >/dev/null && break; \
@@ -365,6 +399,11 @@ api-up: api-keygen ## Start the service. Add DATABASE_URL=... to use Postgres in
 .PHONY: api-up-postgres
 api-up-postgres: ## Start the service against the local Postgres, so data survives a restart
 	@$(MAKE) api-up DATABASE_URL="$(LOCAL_DATABASE_URL)"
+
+.PHONY: api-up-limited
+api-up-limited: ## Start against Postgres with a low rate limit, for the Phase 10 scenarios
+	@$(MAKE) api-up DATABASE_URL="$(LOCAL_DATABASE_URL)" \
+		RATE_LIMIT_PER_SECOND=$(or $(RPS),2) RATE_LIMIT_BURST=$(or $(BURST),5)
 
 .PHONY: api-down
 api-down: ## Stop the background service, including one started by hand
@@ -401,6 +440,10 @@ api-token: ## Mint a token: make api-token TENANT=<uuid> SUBJECT=<sub> [ROLES=in
 .PHONY: metrics
 metrics: ## Scrape the metrics endpoint
 	@curl -s http://localhost:$(or $(METRICS_PORT),9090)/metrics
+
+.PHONY: ratelimit-scenarios
+ratelimit-scenarios: ## Exercise the rate limiter against the running service
+	@./scripts/ratelimit_scenarios.sh
 
 .PHONY: metrics-scenarios
 metrics-scenarios: ## Drive traffic and assert the metrics moved correctly

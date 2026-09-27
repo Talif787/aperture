@@ -90,6 +90,17 @@ func (r *Recorder) ChangesPulled(count int) {
 		"Change records returned to devices.", nil, float64(count))
 }
 
+// RequestThrottled records a refusal by the rate limiter.
+//
+// Labelled by route only, never by tenant. Tenant identifiers are unbounded, and this
+// counter rises fastest exactly when the system is under strain, so a cardinality mistake
+// here would take the monitoring down at the worst possible moment.
+func (r *Recorder) RequestThrottled(route string) {
+	r.registry.Counter("aperture_http_throttled_total",
+		"Requests refused by the rate limiter, by route template.",
+		Labels{"route": route}, 1)
+}
+
 // AuthenticationFailed records a rejected token.
 //
 // Labelled by reason so a spike in expiry (a clock problem) is distinguishable from a

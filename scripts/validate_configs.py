@@ -123,36 +123,50 @@ def check_go_module_floor() -> list[str]:
 
 
 
-def alignment_problems(entries, path, line_number) -> list[str]:
-    """Expected columns for one alignment group, following gofmt's outlier rule.
+def alignment_problems(entries, path, line_number, split_outliers: bool) -> list[str]:
+    """Expected columns for one alignment group.
 
-    gofmt does not align a whole group to its longest member. An entry far wider than its
-    neighbours takes a single space and splits the run, and the entries either side align
-    among themselves. Without this the checker asserts one uniform width, which a file can
-    satisfy while being consistently wrong, which is exactly what happened here.
+    Composite literals and declaration groups are aligned differently, which cost a false
+    positive to learn. In a map or struct literal, go/printer compares each entry's size
+    against the previous one and starts a new alignment section when the ratio is extreme,
+    so one very long key does not pad every other line out to meet it. A var or const block
+    goes through a different path and simply aligns to its longest name, however lopsided.
 
-    The ratio is a heuristic, not go/printer's algorithm. It reproduces the cases in this
-    repository and will not reproduce every case; gofmt remains the authority, and
-    `make backend-fmt-check` prints its diff.
+    Deriving the rule from the literal case and applying it everywhere flagged
+
+        var (
+            wg      sync.WaitGroup
+            mu      sync.Mutex
+            allowed int
+        )
+
+    as wanting three columns instead of eight, because `allowed` is more than twice the
+    length of `wg`. gofmt aligns all three.
+
+    The ratio is a heuristic either way, not go/printer's algorithm. gofmt remains the
+    authority and `make backend-fmt-check` prints its diff.
     """
     import statistics
 
-    lengths = [len(name) for name, _ in entries]
-    median = statistics.median(lengths)
-
     runs: list[list[tuple[str, int]]] = []
-    current: list[tuple[str, int]] = []
 
-    for entry, length in zip(entries, lengths):
-        if length > 2 * median:
-            if current:
-                runs.append(current)
-            runs.append([entry])
-            current = []
-        else:
-            current.append(entry)
-    if current:
-        runs.append(current)
+    if split_outliers:
+        lengths = [len(name) for name, _ in entries]
+        median = statistics.median(lengths)
+        current: list[tuple[str, int]] = []
+
+        for entry, length in zip(entries, lengths):
+            if length > 2 * median:
+                if current:
+                    runs.append(current)
+                runs.append([entry])
+                current = []
+            else:
+                current.append(entry)
+        if current:
+            runs.append(current)
+    else:
+        runs = [list(entries)]
 
     problems: list[str] = []
     for run in runs:
@@ -192,7 +206,11 @@ def check_go_alignment() -> list[str]:
     for path in sorted(backend.rglob("*.go")):
         text = path.read_text(encoding="utf-8")
 
-        for match in list(group.finditer(text)) + list(map_literal.finditer(text)):
+        # The two shapes are collected separately because only literals split on outliers.
+        candidates = [(m, False) for m in group.finditer(text)]
+        candidates += [(m, True) for m in map_literal.finditer(text)]
+
+        for match, split_outliers in candidates:
             # Grouped by indentation. gofmt aligns each nesting level independently, so
             # measuring a nested map's inner keys against its outer one reports a
             # misalignment that does not exist. The checker found exactly that on its
@@ -213,7 +231,9 @@ def check_go_alignment() -> list[str]:
                     continue
 
                 line_number = text[:match.start()].count("\n") + 1
-                problems.extend(alignment_problems(entries, path, line_number))
+                problems.extend(
+                    alignment_problems(entries, path, line_number, split_outliers)
+                )
 
     if not problems:
         print("Go alignment: var, const, and struct groups look gofmt-clean")
