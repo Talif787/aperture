@@ -411,14 +411,25 @@ build-compare: build-release ## Compare this build against a published checksum:
 		if [ "$$local_sha" = "$(SHA)" ]; then \
 			echo "match: this source produces the published binary"; \
 			echo "  $$local_sha"; \
-		else \
-			echo "MISMATCH"; \
-			echo "  local:     $$local_sha"; \
-			echo "  published: $(SHA)"; \
-			echo; \
-			echo "Same Go minor version? Same commit? Both are required."; \
-			exit 1; \
-		fi
+			exit 0; \
+		fi; \
+		echo "MISMATCH"; \
+		echo "  local:     $$local_sha"; \
+		echo "  published: $(SHA)"; \
+		echo; \
+		echo "The three inputs that must match, in the order they usually differ:"; \
+		echo; \
+		echo "  1. toolchain   $$(GOTOOLCHAIN=local go version | awk '{print $$3}')"; \
+		echo "     The release names its own in aperture.buildinfo.txt:"; \
+		echo "       gh release download <tag> -p aperture.buildinfo.txt -O -"; \
+		echo "     A patch difference is enough. 1.24.6 and 1.24.7 produce different bytes."; \
+		echo; \
+		echo "  2. commit      $$(git rev-parse --short HEAD 2>/dev/null) $$(git describe --tags --always 2>/dev/null)"; \
+		echo "     working tree: $$(git status --porcelain 2>/dev/null | wc -l) uncommitted change(s)"; \
+		echo; \
+		echo "  3. version     $(VERSION)"; \
+		echo "     The embedded string is part of the binary, so it must match too."; \
+		exit 1
 
 .PHONY: sbom
 sbom: build-release ## List every module compiled into the binary

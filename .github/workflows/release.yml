@@ -45,6 +45,8 @@ jobs:
           # Tags are needed for `git describe`, and a shallow clone has none.
           fetch-depth: 0
 
+      # Floating is fine here. This job asks whether the code is correct, which should
+      # hold on any 1.24.x; only the build job needs byte-level determinism.
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
@@ -85,9 +87,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Pinned to an exact patch, unlike the pull request gate.
+      #
+      # `1.24` floats to whatever 1.24.x is newest on the day. The first release proved the
+      # point: CI resolved it to 1.24.13 while a local rebuild of the same commit used
+      # 1.24.7, and the binaries differed. That makes the artifact depend on when it was
+      # built, which is exactly what a reproducibility claim denies.
+      #
+      # Pinned forward rather than back. Patch releases carry security fixes, so holding an
+      # old one to preserve a comparison is the wrong trade; anyone verifying an older
+      # release should use the toolchain that release names in aperture.buildinfo.txt.
+      #
+      # The cost is real and worth naming: this line goes stale, and raising it invalidates
+      # byte comparisons against earlier releases. That is correct, because they were built
+      # with a different compiler, but it does mean the bump is a deliberate change rather
+      # than something to leave floating.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.24.13'
           cache-dependency-path: backend/go.sum
 
       - name: Report the version this will embed
@@ -100,6 +117,15 @@ jobs:
 
       - name: Module manifest
         run: make sbom
+
+      # The exact toolchain and build flags, published with the artifact. Without them a
+      # verifier who gets a mismatch has no way to tell whether the source differs or
+      # their compiler does, and the first guess is always the wrong one.
+      - name: Build settings
+        run: |
+          go version | tee dist/aperture.buildinfo.txt
+          go version -m dist/aperture | grep -E 'build\s+(-|GO|CGO|vcs)' \
+            | sed 's/^[[:space:]]*/  /' | tee -a dist/aperture.buildinfo.txt
 
       # The binary is asked directly rather than inferred from the build command. A tag
       # whose artifact reports a different version than the tag is a problem worth finding
@@ -121,6 +147,7 @@ jobs:
             dist/aperture
             dist/aperture.sha256
             dist/aperture.modules.txt
+            dist/aperture.buildinfo.txt
           if-no-files-found: error
 
       # Attached to the tag so the checksum and manifest travel with it. Without them the
@@ -133,5 +160,6 @@ jobs:
             dist/aperture
             dist/aperture.sha256
             dist/aperture.modules.txt
+            dist/aperture.buildinfo.txt
           generate_release_notes: true
           fail_on_unmatched_files: true

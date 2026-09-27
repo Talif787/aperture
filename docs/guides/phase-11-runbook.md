@@ -95,9 +95,20 @@ export PATH="$HOME/.local/go/bin:$PATH"
 GOTOOLCHAIN=local go version
 ```
 
-**The Go minor version is now load-bearing.** Two builds from the same source produce
-different bytes under different Go minor versions. CI uses 1.24, so a local build must use
-1.24 to match a published checksum.
+**The Go patch version is load-bearing, not just the minor.** The release job pins
+`1.24.13` exactly, and a local build on 1.24.7 produces a different binary from the same
+source. To verify a release locally you need that exact toolchain:
+
+```bash
+cd /tmp
+curl -fLO https://go.dev/dl/go1.24.13.linux-amd64.tar.gz
+rm -rf ~/.local/go && tar -C ~/.local -xzf go1.24.13.linux-amd64.tar.gz
+export PATH="$HOME/.local/go/bin:$PATH"
+GOTOOLCHAIN=local go version      # expect go1.24.13
+```
+
+Every release publishes the toolchain it used in `aperture.buildinfo.txt`, so verifying an
+older release means installing the version that release names rather than the newest.
 
 Apply the archive. **No files were deleted in Phase 11**, and it omits `backend/go.mod`,
 `backend/go.sum`, and `dist/`:
@@ -283,9 +294,25 @@ git checkout -                            # back to where you were
 
 Expected: `match: this source produces the published binary`.
 
-**A mismatch is informative rather than alarming.** The likely causes, in order: a different
-Go minor version, uncommitted local changes, or a different commit than the tag. All three
-are worth knowing. Only after ruling them out is a mismatch a real problem.
+**A mismatch is informative rather than alarming**, and `make build-compare` prints the
+three inputs that must match when it finds one.
+
+The first release mismatched, and the cause was in the workflow rather than in anything
+local: it pinned `go-version: '1.24'`, which floats to whatever 1.24.x is newest on the
+day. A patch difference is enough to change the bytes. The release job now pins an exact
+patch and publishes it in `aperture.buildinfo.txt`, because a verifier who gets a mismatch
+and cannot see the toolchain has no way to tell whether the source differs or their
+compiler does, and the first guess is always the wrong one.
+
+Compare toolchains directly:
+
+```bash
+gh release download <tag> -p aperture.buildinfo.txt -O -
+GOTOOLCHAIN=local go version
+```
+
+The verify job deliberately still floats. It asks whether the code is correct, which should
+hold on any 1.24.x; only the build job needs byte-level determinism.
 
 This only works once a tag has gone through the release workflow. Before then, `gh release
 download` finds nothing, which is expected.
@@ -477,7 +504,8 @@ make release-check             && echo "8/8 pre-tag gate"
 | The version is `<sha>-dev` on a tagged commit | The tag is not reachable, often a shallow clone | `git fetch --tags`; confirm with `git describe --tags --exact-match` |
 | `build-release` fails with "the binary reports X, expected Y" | The ldflags path changed, or `VERSION` was overridden inconsistently | Rebuild with an explicit `make build-release VERSION=...` |
 | `build-verify` reports the builds differ | Something nondeterministic entered the build | Check for an embedded timestamp or path; `go version -m dist/aperture` shows the flags used |
-| `build-compare` mismatches | A different Go minor version, uncommitted changes, or a different commit | `go version`, `git status --short`, `git describe`. All three must match CI |
+| `build-compare` mismatches | A different Go **patch** version, uncommitted changes, or a different commit | The command prints all three. Compare against `aperture.buildinfo.txt` from the release |
+| `go version` reports 1.24.7 but the release used 1.24.13 | Cloud Shell's Go, or an older local install | Install the exact version from Part 2. `1.24` floating to different patches is what caused the first mismatch |
 | `gh release download` finds nothing | No tag has been through the release workflow yet | Expected before the first release; run `gh workflow run release --ref <tag>` |
 | `./dist/aperture -version` starts a server instead | An old binary without the flag | `make build-release` again |
 | `make sbom` lists only the main module | The binary was built with a stripped module table | Confirm `-ldflags` has no `-buildmode` change; `go version -m` should list deps |
