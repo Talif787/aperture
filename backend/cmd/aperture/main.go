@@ -18,8 +18,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
+	"os/signal"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -47,6 +47,20 @@ const (
 var buildVersion = "dev"
 
 func main() {
+	// Answered before anything else is read or opened, so the question can be asked of a
+	// binary that has no valid configuration, no database, and no key set. That is exactly
+	// the situation in which someone needs to know what they are holding.
+	//
+	// Scanned directly rather than through the flag package, which would reject the
+	// unknown arguments an orchestrator sometimes appends and turn a diagnostic into a
+	// crash loop.
+	for _, arg := range os.Args[1:] {
+		if arg == "-version" || arg == "--version" {
+			fmt.Println(buildVersion)
+			return
+		}
+	}
+
 	config := loadConfig()
 	logger := obs.NewLogger(config.logLevel, config.environment)
 

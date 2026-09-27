@@ -351,6 +351,95 @@ DATABASE_URL ?=
 RATE_LIMIT_PER_SECOND ?= 0
 RATE_LIMIT_BURST ?= 60
 
+# ------------------------------------------------------------------------- release
+
+# Derived from the tag when one points at HEAD, otherwise the short SHA with a -dev
+# suffix. A binary that cannot say what it is built from is one nobody can correlate with
+# a log line or a bug report.
+VERSION := $(shell git describe --tags --exact-match 2>/dev/null || \
+                   echo "$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)-dev")
+
+# -trimpath removes absolute paths from the binary, and CGO_ENABLED=0 removes the dynamic
+# link. Together they make the output depend on the source and the toolchain rather than on
+# whose machine built it, which is what lets `make build-verify` mean anything.
+RELEASE_FLAGS := -trimpath -ldflags "-s -w -X main.buildVersion=$(VERSION)"
+
+.PHONY: version
+version: ## Print the version this build would embed
+	@echo "$(VERSION)"
+
+.PHONY: build-release
+build-release: backend-deps-check ## Build a stripped, reproducible binary
+	@mkdir -p dist
+	@cd backend && CGO_ENABLED=0 GOTOOLCHAIN=local \
+		go build $(RELEASE_FLAGS) -o $(CURDIR)/dist/aperture ./cmd/aperture
+	@cd dist && sha256sum aperture > aperture.sha256
+	@# Asked of the binary rather than assumed from the build command. A binary reporting
+	@# a different version than the build that produced it is a problem worth catching here.
+	@embedded=$$(./dist/aperture -version); \
+		if [ "$$embedded" != "$(VERSION)" ]; then \
+			echo "the binary reports $$embedded, expected $(VERSION)"; exit 1; \
+		fi
+	@echo "dist/aperture  $(VERSION)"
+	@cat dist/aperture.sha256
+
+.PHONY: build-verify
+build-verify: ## Build twice and confirm the output is byte-identical
+	@$(MAKE) --no-print-directory build-release >/dev/null
+	@mv dist/aperture dist/aperture.first
+	@$(MAKE) --no-print-directory build-release >/dev/null
+	@if cmp -s dist/aperture.first dist/aperture; then \
+		echo "reproducible: both builds are byte-identical"; \
+		rm -f dist/aperture.first; \
+	else \
+		echo "NOT reproducible: the two builds differ"; \
+		sha256sum dist/aperture.first dist/aperture; \
+		exit 1; \
+	fi
+
+.PHONY: build-compare
+build-compare: build-release ## Compare this build against a published checksum: make build-compare SHA=<hex>
+	@if [ -z "$(SHA)" ]; then \
+		echo "SHA is required. Get it from the release artifact:"; \
+		echo "  gh release download <tag> -p aperture.sha256 -O - | cut -d' ' -f1"; \
+		exit 1; \
+	fi
+	@# This is the reproducibility check that actually means something. Building twice on
+	@# one machine proves determinism, which Go gives you anyway; matching a build produced
+	@# somewhere else is what proves the published binary came from the published source.
+	@local_sha=$$(cut -d' ' -f1 dist/aperture.sha256); \
+		if [ "$$local_sha" = "$(SHA)" ]; then \
+			echo "match: this source produces the published binary"; \
+			echo "  $$local_sha"; \
+		else \
+			echo "MISMATCH"; \
+			echo "  local:     $$local_sha"; \
+			echo "  published: $(SHA)"; \
+			echo; \
+			echo "Same Go minor version? Same commit? Both are required."; \
+			exit 1; \
+		fi
+
+.PHONY: sbom
+sbom: build-release ## List every module compiled into the binary
+	@# `go version -m` reads the module metadata the linker already embedded, so this is
+	@# derived from the artifact rather than from go.mod. A bill of materials that describes
+	@# the source rather than the binary describes the wrong thing.
+	@cd backend && GOTOOLCHAIN=local go version -m $(CURDIR)/dist/aperture \
+		| awk '$$1 == "dep" || $$1 == "mod" { print "  " $$2 " " $$3 }' \
+		| tee $(CURDIR)/dist/aperture.modules.txt
+
+.PHONY: release-check
+release-check: ## Everything that must hold before a tag is pushed
+	@$(MAKE) --no-print-directory check
+	@$(MAKE) --no-print-directory backend-fmt-check
+	@$(MAKE) --no-print-directory backend-vet
+	@$(MAKE) --no-print-directory backend-test
+	@$(MAKE) --no-print-directory build-verify
+	@echo
+	@echo "Ready to tag $(VERSION)."
+	@echo "  git tag -a <name> -m '<summary>' && git push origin <name>"
+
 .PHONY: api-build
 api-build: ## Build the service and the development token tool
 	@mkdir -p $(DEV_DIR)

@@ -55,3 +55,6 @@ __pycache__/
 # only local, and it must never reach the repository.
 .dev/
 backend/coverage.html
+
+# Release artifacts, rebuilt by `make build-release`.
+dist/

@@ -232,9 +232,19 @@ device's first request after a restart is the one it has the most to send.
 
 ### 7.3 What a refusal tells the client
 
+Drain the bucket first. Run on its own, this returns 200, because a bucket with tokens in
+it serves the request; that is the limiter working, not a missing refusal.
+
 ```bash
-curl -si -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me | head -12
+for i in $(seq 1 10); do
+  curl -s -o /dev/null -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
+done
+
+curl -si -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me | head -14
 ```
+
+At two tokens per second the bucket refills while you read the output, so each section
+below drains again rather than assuming the previous one left it empty.
 
 Expected headers and body:
 
@@ -272,11 +282,18 @@ exercises least is the one that runs during an incident.
 ### 7.4 Tenant isolation, which is the point of the design
 
 ```bash
-# Tenant A is exhausted from 7.2. Tenant B, immediately:
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN_B" localhost:8080/v1/me
+# Drain tenant A, then check both in the same moment.
+for i in $(seq 1 10); do
+  curl -s -o /dev/null -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
+done
+
+curl -s -o /dev/null -w 'tenant A: %{http_code}\n' -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
+curl -s -o /dev/null -w 'tenant B: %{http_code}\n' -H "Authorization: Bearer $TOKEN_B" localhost:8080/v1/me
 ```
 
-Expected: `200`.
+Expected: `429` then `200`. Both halves matter. Checking only that tenant B succeeds would
+pass with the limiter switched off entirely, which makes it a weaker test than its name
+suggests.
 
 Keying on the tenant rather than the address is the whole design. Inspectors in the field
 share a carrier NAT or a site's single uplink, so address-based limiting throttles an entire
@@ -286,9 +303,13 @@ means a caller cannot escape its own limit by changing anything it controls.
 ### 7.5 Recovery
 
 ```bash
+for i in $(seq 1 10); do
+  curl -s -o /dev/null -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
+done
+
 curl -s -o /dev/null -w 'immediately: %{http_code}\n' -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
 sleep 3
-curl -s -o /dev/null -w 'after 3s:     %{http_code}\n' -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
+curl -s -o /dev/null -w 'after 3s:    %{http_code}\n' -H "Authorization: Bearer $TOKEN_A" localhost:8080/v1/me
 ```
 
 Expected: `429` then `200`. Tokens accrue continuously rather than on a timer, so a fleet
